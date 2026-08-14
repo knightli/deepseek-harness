@@ -450,7 +450,9 @@ describe('Web session model selection', () => {
   })
 
   it('refuses a prompt no adapter can route, and reports it on the directory', async () => {
-    const { ctx, sessionId } = await harness()
+    const { ctx, agent, sessionId } = await harness()
+    const followup = vi.fn()
+    Object.assign(agent, { followup })
     const api = createApiProxy(ctx, {
       defaultModelSelection: () => ({ provider: 'deleted-gateway', model: 'deleted-model' }),
       cwd: '/tmp',
@@ -465,6 +467,7 @@ describe('Web session model selection', () => {
       ok: false,
       error: { code: 'model-unavailable', details: { provider: 'deleted-gateway', model: 'deleted-model' } },
     })
+    expect(followup).not.toHaveBeenCalled()
     expect(expectValue(await api.sessions.models(request({ sessionId }))).routable).toBe(false)
 
     // An advisory-unlisted model on a live route is NOT this: the route
@@ -476,6 +479,115 @@ describe('Web session model selection', () => {
     expect(catalog.routable).toBe(true)
     expect(catalog.groups.flatMap(group => group.models.map(model => model.id)))
       .not.toContain('unlisted-but-served')
+    await ctx.fiber.dispose()
+  })
+
+  it('admits a text prompt through an external-text Agent without an LLM route', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const followup = vi.fn()
+    Object.assign(agent, {
+      promptExecution: { kind: 'external-text' },
+      followup,
+    })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'external-runtime', model: 'external-model' }),
+      cwd: '/tmp',
+    })
+    const promptRequest = request({
+      sessionId,
+      mode: 'queue' as const,
+      content: [{ type: 'text' as const, text: 'external work' }],
+    })
+
+    expect(expectValue(await api.sessions.models(request({ sessionId }))).routable).toBe(true)
+    expect((await api.sessions.prompt(promptRequest)).result).toEqual({
+      ok: true,
+      value: { accepted: true },
+    })
+    expect(followup).toHaveBeenCalledOnce()
+    expect(followup.mock.calls[0]?.[0]).toEqual({
+      id: expect.any(String),
+      role: 'user',
+      source: { kind: 'user', rpcId: promptRequest.rpcId },
+      content: [{ type: 'text', text: 'external work' }],
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects image input before persistence for an external-text Agent', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const followup = vi.fn()
+    const validateImage = vi.fn(() => Promise.resolve())
+    const saveImage = vi.fn(() => Promise.resolve({
+      attachmentId: 'unexpected',
+      mediaType: 'image/png' as const,
+      bytes: 1,
+      width: 1,
+      height: 1,
+    }))
+    Object.assign(agent, {
+      promptExecution: { kind: 'external-text' },
+      followup,
+    })
+    ctx.provide('attachments', {
+      imageLimits: {
+        maxImageBytes: 4,
+        maxImagesPerMessage: 2,
+        maxMessageImageBytes: 4,
+        maxImagePixels: 4,
+        mediaTypes: ['image/png'],
+      },
+      validateImage,
+      saveImage,
+    } as never)
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'external-runtime', model: 'external-model' }),
+      cwd: '/tmp',
+    })
+
+    const refused = await api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue' as const,
+      content: [{ type: 'image' as const, mediaType: 'image/png' as const, data: 'AQ==' }],
+    }))
+    expect(refused.result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'attachment-error',
+        details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+      },
+    })
+    expect(validateImage).not.toHaveBeenCalled()
+    expect(saveImage).not.toHaveBeenCalled()
+    expect(followup).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
+  it('refuses model selection for an external-text Agent without mutating defaults', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    Object.assign(agent, { promptExecution: { kind: 'external-text' } })
+    const saveDefaultModelSelection = vi.fn(() => Promise.resolve())
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'external-runtime', model: 'external-model' }),
+      saveDefaultModelSelection,
+      cwd: '/tmp',
+    })
+
+    const refused = await api.sessions.selectModel(request({
+      sessionId,
+      provider: 'deepseek-official',
+      model: 'deepseek-chat',
+    }))
+    expect(refused.result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'model-unavailable',
+        details: { provider: 'deepseek-official', model: 'deepseek-chat' },
+      },
+    })
+    expect(expectValue(await api.sessions.models(request({ sessionId }))).current)
+      .toEqual({ provider: 'external-runtime', model: 'external-model' })
+    expect(saveDefaultModelSelection).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
   })
 
