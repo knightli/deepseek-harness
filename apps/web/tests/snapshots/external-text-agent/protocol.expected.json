@@ -353,6 +353,112 @@
         }
       }
     },
-    "history": []
+    "selectModel": {
+      "ok": false,
+      "error": {
+        "code": "model-unavailable",
+        "message": "no adapter registered for provider \"external-runtime\"",
+        "details": {
+          "provider": "external-runtime",
+          "model": "external-model"
+        }
+      }
+    },
+    "historyBefore": [
+      {
+        "event": {
+          "type": "permission/preset",
+          "seq": 0,
+          "time": "{{timestamp}}",
+          "data": {
+            "preset": "workspace-write"
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "sandbox/mode",
+          "seq": 1,
+          "time": "{{timestamp}}",
+          "data": {
+            "mode": "workspace-write"
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "approval/policy",
+          "seq": 2,
+          "time": "{{timestamp}}",
+          "data": {
+            "policy": "ask"
+          }
+        }
+      }
+    ],
+    "historyAfterPrompt": [
+      {
+        "event": {
+          "type": "permission/preset",
+          "seq": 0,
+          "time": "{{timestamp}}",
+          "data": {
+            "preset": "workspace-write"
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "sandbox/mode",
+          "seq": 1,
+          "time": "{{timestamp}}",
+          "data": {
+            "mode": "workspace-write"
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "approval/policy",
+          "seq": 2,
+          "time": "{{timestamp}}",
+          "data": {
+            "policy": "ask"
+          }
+        }
+      }
+    ],
+    "historyAfterSelectModel": [
+      {
+        "event": {
+          "type": "permission/preset",
+          "seq": 0,
+          "time": "{{timestamp}}",
+          "data": {
+            "preset": "workspace-write"
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "sandbox/mode",
+          "seq": 1,
+          "time": "{{timestamp}}",
+          "data": {
+            "mode": "workspace-write"
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "approval/policy",
+          "seq": 2,
+          "time": "{{timestamp}}",
+          "data": {
+            "policy": "ask"
+          }
+        }
+      }
+    ]
   }
 }

@@ -127,6 +127,10 @@ function projectModels(value: ModelsValue): unknown {
   }
 }
 
+function normalizeRawHistory(history: HistoryPage): unknown[] {
+  return history.events.map(({ event }) => ({ event: { ...event, time: '{{timestamp}}' } }))
+}
+
 async function promptAndSettle(
   scaffold: WebScaffold,
   mode: 'queue' | 'steer',
@@ -182,12 +186,25 @@ describe('web e2e: external Agent text admission through the shipped application
       const stockModels = ok(await rpc<ModelsValue>(stock.baseUrl, 'session.models', {
         sessionId: stockSessionId,
       }))
+      const stockHistoryBefore = ok(await rpc<HistoryPage>(stock.baseUrl, 'session.history', {
+        sessionId: stockSessionId,
+        maxMessages: 10,
+      }))
       const stockPrompt = await rpc(stock.baseUrl, 'session.prompt', {
         sessionId: stockSessionId,
         mode: 'queue',
         content: [{ type: 'text', text: 'must remain refused' }],
       })
-      const stockHistory = ok(await rpc<HistoryPage>(stock.baseUrl, 'session.history', {
+      const stockHistoryAfterPrompt = ok(await rpc<HistoryPage>(stock.baseUrl, 'session.history', {
+        sessionId: stockSessionId,
+        maxMessages: 10,
+      }))
+      const stockSelectModel = await rpc(stock.baseUrl, 'session.selectModel', {
+        sessionId: stockSessionId,
+        provider: EXTERNAL_PROVIDER,
+        model: EXTERNAL_MODEL,
+      })
+      const stockHistoryAfterSelectModel = ok(await rpc<HistoryPage>(stock.baseUrl, 'session.history', {
         sessionId: stockSessionId,
         maxMessages: 10,
       }))
@@ -201,11 +218,23 @@ describe('web e2e: external Agent text admission through the shipped application
           details: { provider: EXTERNAL_PROVIDER, model: EXTERNAL_MODEL },
         },
       })
-      expect(projectHistory(stockHistory)).toEqual([])
+      expect(stockSelectModel).toEqual({
+        ok: false,
+        error: {
+          code: 'model-unavailable',
+          message: `no adapter registered for provider "${EXTERNAL_PROVIDER}"`,
+          details: { provider: EXTERNAL_PROVIDER, model: EXTERNAL_MODEL },
+        },
+      })
+      expect(stockHistoryAfterPrompt.events).toEqual(stockHistoryBefore.events)
+      expect(stockHistoryAfterSelectModel.events).toEqual(stockHistoryBefore.events)
       stockProtocol = {
         models: projectModels(stockModels),
         prompt: stockPrompt,
-        history: projectHistory(stockHistory),
+        selectModel: stockSelectModel,
+        historyBefore: normalizeRawHistory(stockHistoryBefore),
+        historyAfterPrompt: normalizeRawHistory(stockHistoryAfterPrompt),
+        historyAfterSelectModel: normalizeRawHistory(stockHistoryAfterSelectModel),
       }
     } finally {
       await stock.close()
