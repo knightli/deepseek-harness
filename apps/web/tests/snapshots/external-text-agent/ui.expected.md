@@ -1,0 +1,81 @@
+- button "New session"
+- button "Collapse sidebar":
+  - img
+- button "New session":
+  - img
+  - text: New Session
+- text: Workspaces
+- button "Search sessions":
+  - img
+- textbox "Search sessions..."
+- button "View options":
+  - img
+- button "Add workspace":
+  - img
+- tree "Sessions":
+  - treeitem "external-workspace" [expanded]:
+    - img
+    - text: external-workspace
+  - treeitem "External text agent snapshot now" [selected]
+- button "Settings":
+  - img
+  - text: Settings
+- banner:
+  - navigation "Session hierarchy":
+    - button "External text agent snapshot" [disabled]
+  - img
+  - text: Standard mode
+  - button "Session log":
+    - text: Session log
+    - img
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+- text: external create queue prompt {{clock}}
+- button "Copy":
+  - img
+- paragraph: EXTERNAL_CREATE_QUEUE_OK
+- button "Copy":
+  - img
+- button "Good response":
+  - img
+- button "Bad response":
+  - img
+- button "Branch into a new conversation":
+  - img
+- text: {{clock}} Ran for {{duration}} external create steer prompt {{clock}}
+- button "Copy":
+  - img
+- paragraph: EXTERNAL_CREATE_STEER_OK
+- button "Copy":
+  - img
+- button "Good response":
+  - img
+- button "Bad response":
+  - img
+- button "Branch into a new conversation":
+  - img
+- text: {{clock}} Ran for {{duration}} external resume queue prompt {{clock}}
+- button "Copy":
+  - img
+- paragraph: EXTERNAL_RESUME_QUEUE_OK
+- button "Copy":
+  - img
+- button "Good response":
+  - img
+- button "Bad response":
+  - img
+- button "Branch into a new conversation":
+  - img
+- text: {{clock}} Ran for {{duration}}
+- textbox "Message the agent"
+- button "Commands":
+  - img
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Select model":
+  - text: Select model
+  - img
+- button "Send message" [disabled]
+- text: 3 turns · 3 steps LLM {{duration}} Details
+- button "Close details"
+- text: Click a tool row in the message flow to view its details

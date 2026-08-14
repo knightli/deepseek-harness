@@ -24,6 +24,10 @@ Host 向每一种 `AgentFactory` 实现公开同一套会话提示词协议。�
 
 `packages/host/apiproxy/tests/api-proxy-models.spec.ts` 固定准入规则的两侧：没有这项能力的 Agent 在其提供方没有适配器时仍不可路由，并收到 `model-unavailable`；`external-text` Agent 则报告 `routable: true`，把确切的排队文本投递给 `followup`、steering 文本投递给 `steer`，在附件工作前拒绝图片，并在不改变会话选择或部署默认值的前提下拒绝模型选择。子系统的 `type-equiv` 代码块逐字复制 `packages/core/agent/src/runtime-types.ts` 中的公开属性与 JSDoc。
 
+`apps/web/tests/external-text-agent.e2e.ts` 固定组装后应用的边界。它启动已发布的 base 与 Web 层，只禁用具体的 `agent-loop` 配置行，并通过 Loader 的 `cordis:` 配置行挂载确定性的外部 `AgentFactory`；该 fixture 与组合中的其余部分通过同一套生产包图解析。测试经公共 Host HTTP wire 创建会话、读取模型、排队和 steering 文本、取消、重命名并读取历史；随后完整关闭第一台 Host，以相同 workspace、持久化根目录和 harness home 启动第二台 Host，强制进入 `AgentFactory.resume`，再投递第三条提示词。协议 golden 记录标准 Inbox、用户/助手 `SessionEvent` 投影及 create/resume 生命周期轨迹。
+
+同一场景保留负对照：配置到未被服务的外部提供方后，stock AgentLoop 报告 `routable: false`，返回精确的 `model-unavailable` 拒绝，且不追加任何对话历史。原生全 frame ARIA golden 包含已发布的 workspace/session sidebar、对话消息、header/status surface 与可用 composer；没有自定义对话 surface 或客户端 store 参与。
+
 ## 考虑过的替代方案
 
 **把执行模式放入 `AgentOptions`。** 选项描述默认循环消费的模型路由，并作为调用方输入跨越创建边界。外部执行是返回的实时实现所具有的属性；把它作为调用方配置接收，会允许调用方声称 Agent 并未实现的能力。

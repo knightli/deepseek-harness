@@ -1,0 +1,8 @@
+# Keep the shipped AgentLoop while selecting a provider no DSH adapter serves.
+# This assembled regression pins the fail-closed side of the external Agent
+# admission seam.
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: external-runtime
+    model: external-model

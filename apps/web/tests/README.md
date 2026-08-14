@@ -18,6 +18,24 @@ not make a file part of the Client program — the two faces merge cordis
 both. Moving these files into the Client aggregate makes every Host-service
 access fail to compile.
 
+## Borrowed worlds and Loader fixtures
+
+`launchWebScaffold()` owns and removes its temporary workspace and persistence
+root by default. A restart scenario may pass `workspaceCwd` and
+`persistenceRoot` to borrow caller-owned roots: `close()` then tears down only
+the assembled Host, and the caller reuses those roots only after that teardown
+has completed. The caller removes both roots after the final Host stops.
+
+An assembled external-Agent scenario exposes its deterministic factory as a
+Loader builtin and still mounts it through a `cordis:` configuration row. The
+scaffold copies the test fixture into the isolated profile and imports it with
+the production module resolver, so scope and registry package singletons are
+the same ones used by the shipped composition. Do not replace that route with
+a direct `ctx.agents.setFactory()` call: doing so would test a private harness
+shortcut instead of the application Loader seam. Reset a process-cached fixture
+trace only on the first Host and read it from a scaffold that mounted the
+fixture.
+
 ## Do not import `@deepseek-ai/dsh-client-*` here
 
 Importing a Client package — a value or a type — pulls its whole TypeScript

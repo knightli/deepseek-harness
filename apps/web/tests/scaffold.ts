@@ -23,7 +23,7 @@
 // (the plugin-row path discards the ReplayHandle; the direct install keeps
 // assertConsumed for the teardown fixture-consumption check).
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -62,6 +62,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-agent'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { REPO_ROOT, requireDist } from './support.ts'
+import type { ExternalTextAgentTrace } from './fixtures/external-text-agent-contract.ts'
 
 // Host-side web e2e cannot import a browser package: doing so would pull that
 // package's complete TS project into this graph. Mirrored from
@@ -179,12 +180,34 @@ export interface WebScaffold {
   harnessHome: string
   /** Await a settled turn end: in-process turn/end, then the agent's idle flip (which follows the persistence flush). */
   whenTurnSettled(timeoutMs?: number): Promise<SessionId>
+  /** Read the trace from the production-resolved external Agent fixture mounted for this scaffold. */
+  externalTextAgentTrace(): ExternalTextAgentTrace[]
   /** Tear everything down; asserts the replay fixture was fully consumed first (replay/refresh). */
   close(): Promise<void>
 }
 
 /** Options for {@link launchWebScaffold}. */
 export interface LaunchOptions {
+  /**
+   * Existing workspace root borrowed for this Host lifetime. Omission creates
+   * and owns a temporary root. Borrowed roots survive {@link WebScaffold.close}
+   * so a later Host can exercise process-cold session recovery.
+   */
+  workspaceCwd?: string
+  /**
+   * Existing JSONL persistence root borrowed for this Host lifetime. Omission
+   * creates and owns a temporary root. The caller owns cleanup of a borrowed
+   * root after every Host using it has stopped.
+   */
+  persistenceRoot?: string
+  /**
+   * Expose the deterministic external-text AgentFactory fixture as a Loader
+   * builtin. A scenario must still mount it through a `cordis:` config row;
+   * enabling this option alone changes no composition entry.
+   */
+  externalTextAgentFixture?: boolean
+  /** Reset the process-cached external Agent fixture trace before this Host boots. */
+  resetExternalTextAgentTrace?: boolean
   /**
    * Optional product overlay applied after the shipped Web surface and before
    * the scaffold's hermetic test patches, matching the launcher's `--patch`
@@ -278,11 +301,20 @@ export interface LaunchOptions {
 }
 
 /** Dispose the booted tree and remove both owned temp roots, reporting every independent cleanup failure. */
-async function cleanupScaffoldWorld(ctx: Context, workspaceCwd: string, persistenceRoot: string): Promise<unknown[]> {
+async function cleanupScaffoldWorld(
+  ctx: Context,
+  workspaceCwd: string,
+  persistenceRoot: string,
+  ownership: { workspace: boolean; persistence: boolean },
+): Promise<unknown[]> {
   const failures: unknown[] = []
   await Promise.resolve(ctx.fiber.dispose()).catch((error: unknown) => failures.push(error))
-  await rm(workspaceCwd, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
-  await rm(persistenceRoot, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
+  if (ownership.workspace) {
+    await rm(workspaceCwd, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
+  }
+  if (ownership.persistence) {
+    await rm(persistenceRoot, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
+  }
   return failures
 }
 
@@ -317,7 +349,9 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       process.env.DEEPSEEK_API_KEY = originalDeepSeekCredential
     }
   }
-  const workspaceCwd = await realpath(await mkdtemp(join(tmpdir(), 'dsh-web-e2e-ws-')))
+  const ownsWorkspaceCwd = options.workspaceCwd === undefined
+  const workspaceCwd = await realpath(options.workspaceCwd
+    ?? await mkdtemp(join(tmpdir(), 'dsh-web-e2e-ws-')))
   // Isolated harness home: the settings/credentials rows resolve $DSH_HOME
   // paths at load, and an in-process boot must NEVER touch the developer's
   // real ~/.dsh document or credential file.
@@ -350,12 +384,17 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     }
   }
   Object.assign(process.env, skillRootEnvironment)
+  const ownsPersistenceRoot = options.persistenceRoot === undefined
   let persistenceRoot: string
   try {
-    persistenceRoot = await mkdtemp(join(tmpdir(), 'dsh-web-e2e-sessions-'))
+    persistenceRoot = await realpath(options.persistenceRoot
+      ?? await mkdtemp(join(tmpdir(), 'dsh-web-e2e-sessions-')))
   } catch (error) {
     const failures: unknown[] = [error]
-    await rm(workspaceCwd, { recursive: true, force: true }).catch((cleanupError: unknown) => failures.push(cleanupError))
+    if (ownsWorkspaceCwd) {
+      await rm(workspaceCwd, { recursive: true, force: true })
+        .catch((cleanupError: unknown) => failures.push(cleanupError))
+    }
     restoreSkillRootEnvironment()
     if (failures.length > 1) throw new AggregateError(failures, 'web scaffold temp-root setup failed')
     throw error
@@ -496,6 +535,11 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
   const ctx = new Context()
   let port = 0
   let replayHandle: ReplayHandle | undefined
+  let externalTextAgentFixture: {
+    apply(ctx: Context): void
+    externalTextAgentTrace(): ExternalTextAgentTrace[]
+    resetExternalTextAgentTrace(): void
+  } | undefined
   try {
     process.chdir(workspaceCwd)
     // The production module-resolution setup: an empty profile root inside the temp
@@ -520,6 +564,44 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       },
     })
     await ctx.plugin(Loader)
+    if (options.externalTextAgentFixture === true) {
+      if (ctx.loader.internal === undefined) {
+        throw new Error('web e2e scaffold: production module loader unavailable for external Agent fixture')
+      }
+      const fixtureSource = join(
+        REPO_ROOT,
+        'apps',
+        'web',
+        'tests',
+        'fixtures',
+        'external-text-agent.ts',
+      )
+      const contractSource = join(
+        REPO_ROOT,
+        'apps',
+        'web',
+        'tests',
+        'fixtures',
+        'external-text-agent-contract.ts',
+      )
+      const fixtureRuntime = join(profileDir, 'external-text-agent.ts')
+      await Promise.all([
+        copyFile(fixtureSource, fixtureRuntime),
+        copyFile(contractSource, join(profileDir, 'external-text-agent-contract.ts')),
+      ])
+      const fixtureUrl = pathToFileURL(fixtureRuntime).href
+      externalTextAgentFixture = await ctx.loader.internal.import(fixtureUrl, ctx.baseUrl, {}) as typeof externalTextAgentFixture
+      if (externalTextAgentFixture === undefined
+        || typeof externalTextAgentFixture.apply !== 'function'
+        || typeof externalTextAgentFixture.externalTextAgentTrace !== 'function'
+        || typeof externalTextAgentFixture.resetExternalTextAgentTrace !== 'function') {
+        throw new Error('web e2e scaffold: external Agent fixture module has an invalid contract')
+      }
+      if (options.resetExternalTextAgentTrace === true) {
+        externalTextAgentFixture.resetExternalTextAgentTrace()
+      }
+      ctx.loader.builtins['external-text-agent-fixture'] = externalTextAgentFixture
+    }
     ctx.loader.builtins.include = Include
     // `cordis:group` beside it, exactly as `boot()` registers it: a group row is
     // how a preset gives one `isolate` realm to a provider and its consumers,
@@ -568,7 +650,10 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     }
   } catch (error) {
     if (process.cwd() !== originalCwd) process.chdir(originalCwd)
-    const cleanupFailures = await cleanupScaffoldWorld(ctx, workspaceCwd, persistenceRoot)
+    const cleanupFailures = await cleanupScaffoldWorld(ctx, workspaceCwd, persistenceRoot, {
+      workspace: ownsWorkspaceCwd,
+      persistence: ownsPersistenceRoot,
+    })
     restoreCredentialEnvironment()
     restoreSkillRootEnvironment()
     if (cleanupFailures.length > 0) {
@@ -586,6 +671,12 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     ctx,
     workspaceCwd,
     persistenceRoot,
+    externalTextAgentTrace(): ExternalTextAgentTrace[] {
+      if (externalTextAgentFixture === undefined) {
+        throw new Error('web e2e scaffold: external Agent fixture was not mounted')
+      }
+      return externalTextAgentFixture.externalTextAgentTrace()
+    },
     // Barrier stack: the in-process turn/end identifies the session, its
     // explicit flush makes the transcript durable, and the caller's browser
     // settled-poll comes last because host completion strictly precedes render.
@@ -615,7 +706,10 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         failures.push(error)
       }
       try {
-        failures.push(...await cleanupScaffoldWorld(ctx, workspaceCwd, persistenceRoot))
+        failures.push(...await cleanupScaffoldWorld(ctx, workspaceCwd, persistenceRoot, {
+          workspace: ownsWorkspaceCwd,
+          persistence: ownsPersistenceRoot,
+        }))
       } finally {
         restoreCredentialEnvironment()
         restoreSkillRootEnvironment()

@@ -1,0 +1,16 @@
+# Replace only the concrete AgentFactory in the shipped Web composition. The
+# Loader-mounted fixture owns an external provider that the DSH LLM registry
+# intentionally does not serve.
+- id: agent-loop
+  name: '@deepseek-ai/dsh-agent-loop'
+  disabled: true
+
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: external-runtime
+    model: external-model
+
+- insert:
+    - id: external-text-agent-fixture
+      name: cordis:external-text-agent-fixture

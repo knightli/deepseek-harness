@@ -15,6 +15,18 @@ Host 服务：`ctx.apiProxy`、Host 侧 `SessionStore`、`ctx.sessionProjectionC
 `Context`，因此单个程序无法同时看见两者。把这些文件挪进 Client aggregate 会让每一处
 Host 服务访问都无法编译。
 
+## 借用测试世界与 Loader fixture
+
+`launchWebScaffold()` 默认拥有并删除临时 workspace 与持久化根目录。重启场景可以传入
+`workspaceCwd` 和 `persistenceRoot` 来借用由调用方拥有的根目录：此时 `close()` 只关闭组装后的
+Host，调用方必须等该关闭完成后才能复用这些根目录，并在最后一台 Host 停止后删除两者。
+
+组装后的外部 Agent 场景会把确定性工厂暴露为 Loader builtin，但仍通过 `cordis:` 配置行挂载。
+scaffold 把测试 fixture 复制到隔离 profile，并用生产模块解析器导入，因此 scope 与 registry
+包的 singleton 和已发布组合使用的是同一实例。不要把这条路径换成直接调用
+`ctx.agents.setFactory()`：那只会测试私有 harness 捷径，而不是应用的 Loader seam。只在第一台
+Host 上重置进程缓存的 fixture trace，并从实际挂载该 fixture 的 scaffold 读取它。
+
 ## 不要在此 import `@deepseek-ai/dsh-client-*`
 
 import 一个 Client 包——无论值还是类型——都会把它整个 TypeScript 工程、以及它引用的每个工程
