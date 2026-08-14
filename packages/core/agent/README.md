@@ -16,6 +16,8 @@ The scoped-registration surface: `Agent.ctx` is the agent's scope context (`dsh-
 
 `AgentOptions` supplies the initial provider/model route and an optional positive `maxTokens` output cap. The concrete loop resolves any exact-model adapter default, records the effective cap in the request header, and applies it to each conversation-model request; an explicit Agent option wins, while omission leaves the adapter or provider route default in control.
 
+`Agent.promptExecution` is a live, non-persisted capability owned by the returned Agent, not an `AgentOptions` field. Absence leaves text prompt execution on the DSH LLM route and is unroutable only when no adapter serves the selected provider. `{ kind: 'external-text' }` declares that this Agent accepts ordinary text follow-up and steering through its own driver without a DSH adapter; image input and model selection remain unsupported. A factory whose Agent depends on external text execution without a DSH route must declare the capability separately on every Agent returned by both create and resume because session data never reconstructs it; an ordinary custom Agent may omit it ([decision](../../../.agents/notes/implemented/architecture/2026-08-14-external-text-prompt-execution.md)).
+
 - `ctx.agents.register(agent: Agent): () => void` — record an **already-constructed** agent. Disposed with the calling fiber.
 - Advanced ordered lifecycle: `enter(agent, owner): () => void` enforces `agent.id === agent.session.id`, performs the authoritative ID collision check, and inserts without announcing; `owner` explicitly records the live creator-agent relation (or `undefined` for a root), independently of durable session lineage. `announce(agent)` emits `agent/created` exactly once. A detach requested synchronously by a creation listener is deferred until that dispatch unwinds, and every detach checks the captured entry object, so a stale capability cannot delete a later same-ID replacement. The async factory uses this split; ordinary plugins use `register()`.
 - `ctx.agents.get(id: SessionId): Agent | undefined`
@@ -70,6 +72,7 @@ The handle every plugin programs against:
 - `agent.inject(message)` — queue non-waking `next-step` context. A running driver claims it at the nearest later pre-step boundary; an idle driver leaves it pending until `followup()` or `steer()` wakes the driver. It may miss a request whose pre-step already claimed its batch.
 - `agent.cancel(cause, options?)` — cancel the active driver and, unless `options.keepInbox`, durably cancel all pending inbox work. Idle cancellation is a no-op.
 - `agent.whenIdle()` — observe whole-agent quiescence, including replacement work scheduled before the current driver retires. It does not settle any particular message.
+- `agent.promptExecution` — optional live ownership of text prompt execution outside the DSH LLM registry; it is never persisted or inferred from `AgentOptions`.
 - `agent.session`, `agent.status`, `agent.options`, `agent.id`, `agent.ctx`
 
 `running` describes a driver-wide drain interval, not proof that a turn is still open; it can cover turn close, the durability checkpoint, and consecutive queued turns. Only a caller that owns a complete interval may summarize it as a run result ([decision](../../../.agents/notes/implemented/architecture/2026-07-30-followup-enqueue-and-owned-runs.md)).

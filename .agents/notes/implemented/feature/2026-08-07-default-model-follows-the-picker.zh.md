@@ -22,17 +22,17 @@ Status: implemented
 
 `selectionFor(agent)` 每次读取时都解析各层：先取进程内的会话选择，其次取会话最新记录的 `request/header`，最后取当前 Agent 默认值。已有请求日志的会话持续绑定到日志中持久化的选择。空白会话即使创建于偏好保存之前，也会观察到当前默认值；这与 New Session 界面可能复用空白会话的行为一致。
 
-已存选择不要求属于目录。某条提供方路由可能服务其仅供参考的目录未列出的模型。因此，`session.models` 会在已公布分组之外单独报告已存选择，并另行报告适配器是否服务其提供方。
+已存选择不要求属于目录。某条提供方路由可能服务其仅供参考的目录未列出的模型。因此，`session.models` 会在已公布分组之外单独报告已存选择，并另行报告 Host 是否接收这个实时 Agent 的普通文本。
 
 ## 影响
 
 `host.describe` 报告当前 Agent 默认值。模型切换成功后，`settings.yaml` 中会存有一个 `agent-default-model:` 分节。网关不通过 Settings 页 allowlist 暴露该 namespace；模型选择器是它的编辑器。
 
-## 无法发送消息的会话
+## 文本提示词准入
 
-当没有适配器服务会话所选提供方时，`session.prompt` 会在开启轮次前以 `model-unavailable` 拒绝。这一方法是强制执行边界；禁用 composer 只是客户端提供的便利。
+对于注册表驱动的 Agent，当没有适配器服务会话所选提供方时，`session.prompt` 会在开启轮次前以 `model-unavailable` 拒绝。声明 `promptExecution: { kind: 'external-text' }` 的实时 Agent 拥有文本执行，即使没有 DSH 路由也能通过准入；其不支持的操作由 [external-text 提示词执行决策](../architecture/2026-08-14-external-text-prompt-execution.md)定义。这一方法是强制执行边界；禁用 composer 只是客户端提供的便利。
 
-`session.models` 报告 `routable`。ui-model-selection 插件通过 `ctx.conversation.blocks` 投影不可路由的选择，composer 随之变为不可操作，同时保留模型 seat 可用。客户端不知道是否可路由时不会阻断输入，包括目录首次加载或加载失败的情况。
+`session.models` 报告普通文本是否可准入的 `routable`，而不只报告适配器是否存在。ui-model-selection 插件通过 `ctx.conversation.blocks` 投影不可路由的选择，composer 随之变为不可操作，同时保留模型 seat 可用。客户端不知道是否可路由时不会阻断输入，包括目录首次加载或加载失败的情况。
 
 可路由性与目录成员关系不同。仍在服务的提供方路由可以处理未公布的模型，因此不在目录分组中并不代表会话不可用。
 

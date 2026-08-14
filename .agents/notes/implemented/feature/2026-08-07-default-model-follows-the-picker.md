@@ -22,17 +22,17 @@ Reasoning effort makes the persistence shape significant: a model selection with
 
 `selectionFor(agent)` resolves its tiers on every read: a process-local session selection, otherwise the session's latest logged `request/header`, otherwise the live Agent default. A session with a logged request remains bound to that durable selection. A blank session observes the current default even when it was created before the preference was saved; this matches the New Session surface, which may reuse a blank session.
 
-The stored selection does not require catalog membership. A provider route may serve a model omitted from its advisory catalog. `session.models` therefore reports the stored selection independently of advertised groups and separately reports whether an adapter serves its provider.
+The stored selection does not require catalog membership. A provider route may serve a model omitted from its advisory catalog. `session.models` therefore reports the stored selection independently of advertised groups and separately reports whether the Host admits ordinary text for the live Agent.
 
 ## Consequences
 
 `host.describe` reports the live Agent default. A successful model switch stores an `agent-default-model:` section in `settings.yaml`. The gateway does not expose that namespace through its Settings-page allowlist; the model picker is its editor.
 
-## A session that cannot send
+## Text prompt admission
 
-`session.prompt` refuses with `model-unavailable` before opening a turn when no adapter serves the session's selected provider. This method is the enforcement boundary; a disabled composer is only a client affordance.
+For a registry-driven Agent, `session.prompt` refuses with `model-unavailable` before opening a turn when no adapter serves the session's selected provider. A live Agent declaring `promptExecution: { kind: 'external-text' }` owns text execution and remains admitted without a DSH route; its unsupported operations are defined by the [external-text prompt-execution decision](../architecture/2026-08-14-external-text-prompt-execution.md). This method is the enforcement boundary; a disabled composer is only a client affordance.
 
-`session.models` reports `routable`. The ui-model-selection plugin projects an unroutable selection through `ctx.conversation.blocks`, and the composer becomes inert while leaving the model seat available. An unknown client-side routability state, including an initial or failed catalog load, does not block input.
+`session.models` reports `routable` for ordinary text admission, not adapter existence alone. The ui-model-selection plugin projects an unroutable selection through `ctx.conversation.blocks`, and the composer becomes inert while leaving the model seat available. An unknown client-side routability state, including an initial or failed catalog load, does not block input.
 
 Routability is distinct from catalog membership. A live provider route can serve an unadvertised model, so absence from catalog groups does not imply that the session is unusable.
 

@@ -16,6 +16,8 @@ Agent 接口、注册表、进程本地发起方作用域，以及 `agent/*` 事
 
 `AgentOptions` 提供初始的提供方／模型路由，以及可选的正数 `maxTokens` 输出上限。具体循环会解析确切模型的适配器默认值，把生效上限记录到请求 header，并应用到每次对话模型请求；显式 Agent 选项优先，省略时由适配器或提供方路由默认值控制。
 
+`Agent.promptExecution` 是返回的实时 Agent 所拥有的非持久能力，不是 `AgentOptions` 字段。该字段缺席时，文本提示词仍由 DSH LLM 路由执行；只有所选提供方没有适配器服务时才不可路由。`{ kind: 'external-text' }` 声明这个 Agent 通过自身 driver 接受普通文本 follow-up 与 steering，无需 DSH 适配器；图片输入与模型选择仍不受支持。Agent 依赖外部文本执行且没有 DSH 路由的工厂，必须在 create 与 resume 返回的每个 Agent 上分别声明这项能力，因为会话数据不会重建它；普通自定义 Agent 可以省略（[决策](../../../.agents/notes/implemented/architecture/2026-08-14-external-text-prompt-execution.md)）。
+
 - `ctx.agents.register(agent: Agent): () => void`：记录一个 **已经构造完成** 的 agent。随调用 fiber dispose。
 - 高级有序生命周期：`enter(agent, owner): () => void` 强制 `agent.id === agent.session.id`，执行权威 ID 冲突检查，并在不通知的情况下插入；`owner` 显式记录实时创建方 agent 关系（根 agent 为 `undefined`），与持久会话谱系无关。`announce(agent)` 恰好发出一次 `agent/created`。创建监听器同步请求的 detach 会延后到该次分发结束；每次 detach 都会检查捕获的条目对象，因此陈旧能力无法删除后续使用同一 ID 的替代项。异步工厂使用这一拆分；普通插件使用 `register()`。
 - `ctx.agents.get(id: SessionId): Agent | undefined`
@@ -70,6 +72,7 @@ inbox 的实时通知刻意采用逐消息的最小载荷：`agent/inbox/inserte
 - `agent.inject(message)`：将不会唤醒的 `next-step` 上下文排队。运行中的驱动器会在最近的后续 pre-step 边界领取它；idle 驱动器则会让它保持待处理，直至 `followup()` 或 `steer()` 唤醒驱动器。若某次请求的 pre-step 已经领取完批次，它可能赶不上该请求。
 - `agent.cancel(cause, options?)`：取消活跃驱动器，并在未设置 `options.keepInbox` 时持久取消全部待处理 inbox 工作。空闲取消是空操作。
 - `agent.whenIdle()`：观察整个 agent 达到完全停稳，包括当前驱动器退役前调度的替代工作。它不结算任何特定消息。
+- `agent.promptExecution`：可选的实时能力，表示 Agent 在 DSH LLM 注册表之外拥有文本提示词执行；该能力绝不持久化，也不从 `AgentOptions` 推导。
 - `agent.session`、`agent.status`、`agent.options`、`agent.id`、`agent.ctx`
 
 `running` 描述驱动器范围的 drain 区间，而不是轮次仍打开的证明；它可以覆盖轮次关闭、持久性检查点和连续的排队轮次。只有拥有完整区间的调用方才能将其概括为一次运行的结果（[决策](../../../.agents/notes/implemented/architecture/2026-07-30-followup-enqueue-and-owned-runs.md)）。

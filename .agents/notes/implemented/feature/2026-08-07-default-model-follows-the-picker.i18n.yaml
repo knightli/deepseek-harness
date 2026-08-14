@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-07-default-model-follows-the-picker.md
-2026-08-07-default-model-follows-the-picker.md: 5ed9aff020f70c7f37452d903cd458697504bf97
-2026-08-07-default-model-follows-the-picker.zh.md: 2f20cf3a9f66b8c2ce98e4c3a32336de094767e5
+2026-08-07-default-model-follows-the-picker.md: d42049695cc4cbca388241caf84ba9fcd02550ef
+2026-08-07-default-model-follows-the-picker.zh.md: 6e37ff2404ff60c05aa494b4553d1e361ad318e7
