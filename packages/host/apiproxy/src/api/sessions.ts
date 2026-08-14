@@ -153,12 +153,11 @@ export interface SessionModels {
   /** Model selection for the session's next assembled step. */
   current: ModelSelection
   /**
-   * Whether an adapter currently serves `current.provider`, and therefore
-   * whether this session can start a turn at all. Deliberately NOT derivable
-   * from `groups`: catalog membership is advisory, so a route serving a model
-   * it stopped advertising is absent from the groups yet perfectly usable,
-   * while a route whose adapter is gone can serve nothing. A surface that
-   * blocks input must read this rather than the groups.
+   * Whether the live Agent can accept an ordinary text prompt. This may be
+   * true because an adapter serves `current.provider` or because the Agent
+   * executes text externally. It does not promise image input or model
+   * selection. A surface that blocks ordinary text input must read this
+   * rather than infer availability from the advisory `groups` catalog.
    */
   routable: boolean
   /** Successfully loaded provider groups. */
@@ -291,7 +290,8 @@ export interface SessionsApi {
   /**
    * Selects the complete model selection for this session. Exact model metadata
    * validates an optional reasoning effort, while catalog membership remains
-   * advisory. Session-backed subagents reject with `agent-busy`.
+   * advisory. Agents that execute text externally reject with
+   * `model-unavailable`; session-backed subagents reject with `agent-busy`.
    */
   selectModel(request: RpcRequest<{
     sessionId: SessionId

@@ -66,6 +66,12 @@ export interface Agent {
   readonly id: SessionId
   /** The provider route and model this agent's requests use. */
   readonly options: AgentOptions
+  /**
+   * How this live Agent executes prompts. When absent, the selected provider
+   * must exist in the DSH LLM registry. `external-text` accepts only text
+   * follow-up and steering; it does not accept images or model selection.
+   */
+  readonly promptExecution?: { readonly kind: 'external-text' }
   /** The live session this agent drives; its log is the durable source of truth. */
   readonly session: Session
   /** The agent-owned projection of durable pending work. */

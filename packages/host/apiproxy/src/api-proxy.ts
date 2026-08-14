@@ -1826,10 +1826,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   }
 
   /**
-   * Whether an adapter currently serves this provider, and therefore whether
-   * a session selecting it can start a turn. Catalog membership cannot answer
-   * it: an adapter may serve a model its own catalog stopped advertising, so
-   * a provider missing from the groups is not the same as one nothing serves.
+   * Whether the DSH LLM registry can dispatch this provider. Catalog
+   * membership cannot answer it: an adapter may serve a model its own catalog
+   * stopped advertising, so a provider missing from the groups is not the same
+   * as one nothing serves.
    * A composition with no llm registry at all cannot judge and says yes —
    * the dispatch it would have refused fails on its own terms.
    */
@@ -1838,23 +1838,39 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return llm === undefined || llm.listProviders().some(entry => entry.id === provider)
   }
 
+  /** Whether this live Agent owns ordinary text execution outside the DSH LLM registry. */
+  function executesTextExternally(agent: Agent): boolean {
+    return agent.promptExecution?.kind === 'external-text'
+  }
+
+  /** Whether this live Agent can accept an ordinary text prompt. */
+  function textPromptRoutable(agent: Agent, provider: string): boolean {
+    return executesTextExternally(agent) || routeServed(provider)
+  }
+
   /**
-   * Resolve the addressed agent for a turn-starting method and refuse when no
-   * adapter serves its current selection: a provider nothing serves cannot start a
-   * turn, and letting it try spends the whole pre-step path to fail inside
-   * the adapter with a message about registration. Refusing here names the
-   * model the session is pointed at while the draft is still in the composer.
-   * This is `session.prompt`'s enforcement boundary: a client that disables
-   * its input is an affordance, and the method stays callable regardless.
+   * Resolve the addressed agent for `session.prompt`, enforce its accepted
+   * input kind, and refuse registry-driven text execution when no adapter
+   * serves the current selection. This is the method's enforcement boundary;
+   * a client that disables input is only an affordance.
    */
   async function turnAgentFor<T>(
-    request: RpcRequest<unknown>, sessionId: SessionId,
+    request: RpcRequest<unknown>, sessionId: SessionId, contentKind: 'text-only' | 'with-image',
   ): Promise<{ agent: Agent } | { refused: RpcResponse<T> }> {
     const found = await agentFor(sessionId)
     if ('error' in found) return { refused: err(request, found.error) }
     const agent = found.agent
+    if (contentKind === 'with-image' && executesTextExternally(agent)) {
+      return {
+        refused: err(request, {
+          code: 'attachment-error',
+          message: 'This session does not support image input.',
+          details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+        }),
+      }
+    }
     const selection = selectionFor(agent).current
-    if (!routeServed(selection.provider)) {
+    if (!textPromptRoutable(agent, selection.provider)) {
       return {
         refused: err(request, {
           code: 'model-unavailable',
@@ -2275,7 +2291,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         if ('error' in found) return err(request, found.error)
         const current = selectionFor(found.agent).current
         const { groups, failures } = await buildModelCatalog(ctx)
-        const routable = routeServed(current.provider)
+        const routable = textPromptRoutable(found.agent, current.provider)
         return ok(request, { current: { ...current }, routable, groups, failures })
       },
 
@@ -2283,6 +2299,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const { sessionId, provider, model, reasoningEffort } = request.payload
         const found = await agentFor(sessionId)
         if ('error' in found) return err(request, found.error)
+        if (executesTextExternally(found.agent)) {
+          return err(request, {
+            code: 'model-unavailable',
+            message: 'model selection is unavailable for this session',
+            details: { provider, model },
+          })
+        }
         return serializeImageAdmission(found.agent, async () => {
           try {
             const resolved = await ctx.llm.resolveCallConfig({
@@ -2470,7 +2493,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             details: { value: clientTimeZone },
           })
         }
-        const resolved = await turnAgentFor<{ accepted: true }>(request, sessionId)
+        const hasImage = content.some(part => part.type === 'image')
+        const resolved = await turnAgentFor<{ accepted: true }>(
+          request, sessionId, hasImage ? 'with-image' : 'text-only',
+        )
         if ('refused' in resolved) return resolved.refused
         const agent = resolved.agent
         // Request identity and optional browser zone ride the exact durable user message.
@@ -2479,7 +2505,6 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           rpcId: request.rpcId,
           ...(canonicalTimeZone === undefined ? {} : { clientTimeZone: canonicalTimeZone }),
         }
-        const hasImage = content.some(part => part.type === 'image')
         const admit = async (): Promise<RpcResponse<{ accepted: true }>> => {
           try {
             if (hasImage) {
