@@ -514,6 +514,40 @@ describe('Web session model selection', () => {
     await ctx.fiber.dispose()
   })
 
+  it('steers an external-text Agent without an LLM route', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const followup = vi.fn()
+    const steer = vi.fn()
+    Object.assign(agent, {
+      promptExecution: { kind: 'external-text' },
+      followup,
+      steer,
+    })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'external-runtime', model: 'external-model' }),
+      cwd: '/tmp',
+    })
+    const promptRequest = request({
+      sessionId,
+      mode: 'steer' as const,
+      content: [{ type: 'text' as const, text: 'steer external work' }],
+    })
+
+    expect((await api.sessions.prompt(promptRequest)).result).toEqual({
+      ok: true,
+      value: { accepted: true },
+    })
+    expect(steer).toHaveBeenCalledOnce()
+    expect(steer.mock.calls[0]?.[0]).toEqual({
+      id: expect.any(String),
+      role: 'user',
+      source: { kind: 'user', rpcId: promptRequest.rpcId },
+      content: [{ type: 'text', text: 'steer external work' }],
+    })
+    expect(followup).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
   it('rejects image input before persistence for an external-text Agent', async () => {
     const { ctx, agent, sessionId } = await harness()
     const followup = vi.fn()
