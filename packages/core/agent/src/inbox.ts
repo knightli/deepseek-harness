@@ -61,15 +61,27 @@ export class Inbox {
   }
 
   /**
-   * Remove and return the complete batch proposed for one step, publishing
-   * each claimed message. The durable splices are pure deletions.
+   * Remove and return the batch proposed for one step, publishing each claimed
+   * message. The durable splices are pure deletions. Callers may bound the
+   * `next-step` prefix when they have already frozen an external request; the
+   * default preserves the complete-batch behavior.
    * @param target - whether this boundary also consumes one queued turn.
    * @param turn - turn that will own the claimed batch.
+   * @param nextStepLimit - maximum leading next-step messages to claim.
    * @returns next-step input followed by the queued turn, when requested.
    * @internal - The agent loop's step-boundary operation, not a plugin extension point.
    */
-  claim(target: InboxTarget, turn: number): UserMessage[] {
-    const claimed = this.mutate('next-step', 0, this.nextStep.length, [], false)
+  claim(target: InboxTarget, turn: number, nextStepLimit = this.nextStep.length): UserMessage[] {
+    if (!Number.isSafeInteger(nextStepLimit) || nextStepLimit < 0) {
+      throw new Error('next-step claim limit must be a non-negative safe integer')
+    }
+    const claimed = this.mutate(
+      'next-step',
+      0,
+      Math.min(nextStepLimit, this.nextStep.length),
+      [],
+      false,
+    )
     if (target === 'next-turn') {
       claimed.push(...this.mutate('next-turn', 0, 1, [], false))
     }

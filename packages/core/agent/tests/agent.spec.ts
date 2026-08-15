@@ -140,6 +140,38 @@ describe('Inbox', () => {
     inbox.clear()
     expect(session.events).toHaveLength(beforeClear + 2)
   })
+
+  it('claims only the requested next-step prefix without discarding the pending tail', () => {
+    const session = Session.create(SessionId('claim-prefix-inbox'))
+    const claimedNotifications: Array<{ message: UserMessage; turn: number }> = []
+    const discarded: UserMessage[] = []
+    const inbox = new Inbox(session, {
+      claimed: (message, turn) => void claimedNotifications.push({ message, turn }),
+      inserted: () => {},
+      discarded: message => void discarded.push(message),
+    })
+    const first = createUserMessage({ content: [{ type: 'text', text: 'first' }], source: { kind: 'user' } })
+    const second = createUserMessage({ content: [{ type: 'text', text: 'second' }], source: { kind: 'user' } })
+    inbox.append('next-step', first)
+    inbox.append('next-step', second)
+    const beforeClaim = session.events.length
+
+    expect(inbox.claim('next-step', 7, 1)).toEqual([first])
+
+    expect(inbox.nextStep).toEqual([second])
+    expect(claimedNotifications).toEqual([{ message: first, turn: 7 }])
+    expect(discarded).toEqual([])
+    expect(session.events.slice(beforeClaim).map(event => event.type === 'agent/inbox/spliced'
+      ? event.data
+      : event.type)).toEqual([
+      { target: 'next-step', start: 0, removedCount: 1, inserted: [] },
+    ])
+    expect(() => inbox.claim('next-step', 8, Number.NaN))
+      .toThrow('next-step claim limit must be a non-negative safe integer')
+    expect(() => inbox.claim('next-step', 8, -1))
+      .toThrow('next-step claim limit must be a non-negative safe integer')
+    expect(inbox.nextStep).toEqual([second])
+  })
 })
 
 describe('AgentRegistry', () => {
