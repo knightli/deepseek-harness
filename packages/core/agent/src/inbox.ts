@@ -71,7 +71,7 @@ export class Inbox {
    * @returns next-step input followed by the queued turn, when requested.
    * @internal - The agent loop's step-boundary operation, not a plugin extension point.
    */
-  claim(target: InboxTarget, turn: number, nextStepLimit = this.nextStep.length): UserMessage[] {
+  claim(target: InboxTarget, turn: number, nextStepLimit: number = this.nextStep.length): UserMessage[] {
     if (!Number.isSafeInteger(nextStepLimit) || nextStepLimit < 0) {
       throw new Error('next-step claim limit must be a non-negative safe integer')
     }
