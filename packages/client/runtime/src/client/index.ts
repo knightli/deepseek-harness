@@ -234,5 +234,5 @@ export function apply(ctx: Context): void {
       }
     },
   })
-  ctx.effect(() => () => { loop.stop() }, 'runtime: connection stream loop')
+  ctx.effect(() => () => loop.stop(), 'runtime: connection stream loop')
 }

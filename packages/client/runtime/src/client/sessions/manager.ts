@@ -885,23 +885,8 @@ export class SessionManager {
     }
   }
 
-  /**
-   * The moment a connection generation dies (before any next-generation frame
-   * can arrive — onConnected waits for the readiness handshake while replayed
-   * frames flow from stream open, so clearing there would race the replay):
-   * drop generation-scoped live state. Interactions resolved while disconnected
-   * send no frame, so stale statuses and buffered answerable frames must not
-   * survive into the next generation — mux-open replay re-adds every still-pending
-   * request with its live rpcId.
-  */
-  /**
-   * Fence resident and buffered session state before the new streams can dispatch frames.
-   * @param generation - physical connection generation beginning before stream delivery.
-   */
-  handleGenerationStart(generation: number): void {
-    this.connectionGeneration = generation
-    this.connectedGeneration = null
-    for (const session of this.sessions.values()) session.handleGenerationStart(generation)
+  /** Drop buffered interaction requests whose RPC ids belong to a dead connection. */
+  private discardBufferedInteractions(): void {
     for (const [sessionId, buffer] of [...this.pendingBuffers]) {
       const kept = buffer.filter(item =>
         item.payload.type !== 'approval/requested' && item.payload.type !== 'question/requested')
@@ -911,17 +896,23 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Fence response carriers before the new streams can dispatch frames. Resident
+   * interactions remain visible until ready-generation replay reconciles them.
+   * @param generation - physical connection generation beginning before stream delivery.
+   */
+  handleGenerationStart(generation: number): void {
+    this.connectionGeneration = generation
+    this.connectedGeneration = null
+    for (const session of this.sessions.values()) session.handleGenerationStart(generation)
+    this.discardBufferedInteractions()
+  }
+
   /** Preserve visible interaction truth while making all response carriers unavailable. */
   handleDisconnected(): void {
     this.connectedGeneration = null
     for (const session of this.sessions.values()) session.handleDisconnected()
-    for (const [sessionId, buffer] of [...this.pendingBuffers]) {
-      const kept = buffer.filter(item =>
-        item.payload.type !== 'approval/requested' && item.payload.type !== 'question/requested')
-      if (kept.length === buffer.length) continue
-      if (kept.length === 0) this.pendingBuffers.delete(sessionId)
-      else this.pendingBuffers.set(sessionId, kept)
-    }
+    this.discardBufferedInteractions()
   }
 
   /**

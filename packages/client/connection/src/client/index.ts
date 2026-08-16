@@ -84,7 +84,7 @@ export interface ConnectionHandle {
    * @param config - reconnect/backoff tunables.
    * @returns stop handle for the loop.
    */
-  start(sinks: ConnectionSinks, config?: ConnectionConfig): { stop(): void }
+  start(sinks: ConnectionSinks, config?: ConnectionConfig): { stop(): Promise<void> }
 }
 
 /**
@@ -166,9 +166,10 @@ export function apply(ctx: Context): void {
       controller.start()
       return {
         stop: () => {
-          controller.stop()
+          const stopped = controller.stop()
           publishDescription(undefined)
           publishConnectionState(undefined)
+          return stopped
         },
       }
     },

@@ -433,14 +433,6 @@ export class Session implements SessionFace {
     // already, and the host never resends it. The mirror re-baselines on the
     // session/subscribed frame instead (same stream as the queue snapshot
     // that follows it, so ordering is guaranteed).
-    if (this.openState === 'cold') return // never opened: no window to rebuild (doOpen flips to 'loading' synchronously, so cold implies no in-flight open)
-    this.openGeneration++
-    this.openPromise = null
-    this.openState = 'cold'
-    this.openError = null
-    this.events = []
-    this.views = []
-    this.baseSeq = 0
     // A connection resync keeps current-generation replay that arrived before
     // readiness and drops only stale generations. Other rebuild callers retain
     // the original full-clear behavior.
@@ -451,6 +443,19 @@ export class Session implements SessionFace {
       pendingChanged = true
     }
     if (pendingChanged) this.pendingRev++
+    if (this.openState === 'cold') {
+      // A resident cold Session has no history window to rebuild, but it still
+      // owns rendered interactions and must reconcile them at readiness.
+      if (pendingChanged) this.notifier.markDirty()
+      return
+    }
+    this.openGeneration++
+    this.openPromise = null
+    this.openState = 'cold'
+    this.openError = null
+    this.events = []
+    this.views = []
+    this.baseSeq = 0
     this.subscribedLastSeq = null
     this.liveBuffer = []
     this.notifier.markDirty()

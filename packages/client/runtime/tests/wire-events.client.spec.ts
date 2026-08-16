@@ -75,7 +75,7 @@ async function mount(): Promise<Bench> {
     },
     start: (sinks) => {
       bench.sinks = sinks
-      return { stop: () => {} }
+      return { stop: () => Promise.resolve() }
     },
   }
   ctx.reflect.provide('connection', handle)
@@ -216,5 +216,45 @@ describe('wire event bridge', () => {
     })
     expect(session.getSnapshot().pending).toEqual([])
     expect(sessions.list.getSnapshot().byId[sessionId]?.pendingInteraction).toBeUndefined()
+  })
+
+  it('removes an unreplayed approval from a resident cold session after reconnect readiness', async () => {
+    const bench = await mount()
+    const sessionId = 's-cold-reconnect' as never
+    const approvalId = 'a-cold-reconnect' as never
+    const description = {
+      version: '0', cwd: '/f', attachedSessions: 1, canOpenPath: true,
+    }
+    bench.sinks?.onGenerationStart?.(1)
+    bench.sinks?.onConnected?.(description)
+    await vi.waitFor(() => {
+      expect(bench.api.callsOf('session.list')).toHaveLength(1)
+    })
+    bench.sinks?.onHostEnvelope?.({
+      rpcId: 'host-added-cold' as never,
+      payload: { type: 'host/session-added', sessionId, blank: false },
+    })
+    await Promise.resolve()
+    bench.sinks?.onMuxEnvelope?.({
+      rpcId: 'cold-old-generation' as never,
+      payload: {
+        type: 'approval/requested', sessionId, approvalId, toolName: 'write',
+      },
+    })
+
+    const sessions = bench.ctx.sessions as RuntimeClient.SessionRuntime
+    const session = sessions.binding(sessionId)?.session
+    if (session === undefined) throw new Error('cold session binding was not materialized')
+    expect(bench.api.callsOf('session.history')).toEqual([])
+    expect(session.getSnapshot().pending).toHaveLength(1)
+
+    bench.sinks?.onStateChange?.('reconnecting')
+    bench.sinks?.onGenerationStart?.(2)
+    bench.sinks?.onConnected?.(description)
+    await vi.waitFor(() => {
+      expect(bench.api.callsOf('session.list')).toHaveLength(2)
+    })
+
+    expect(session.getSnapshot().pending).toEqual([])
   })
 })

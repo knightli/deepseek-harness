@@ -278,6 +278,10 @@ export class FakeApiClient implements IApiClient {
     return this.muxConns.length
   }
 
+  get openHostCount(): number {
+    return this.hostConns.length
+  }
+
   callsOf(method: string): unknown[] {
     return this.calls.filter(c => c.method === method).map(c => c.payload)
   }
@@ -287,39 +291,64 @@ export class FakeApiClient implements IApiClient {
     return response
   }
 
-  private async *openStream<F>(
+  private openStream<F>(
     registry: StreamConn<F>[],
     signal: AbortSignal,
     onOpen?: () => void,
     abortInsensitive = false,
-  ): AsyncGenerator<RpcRequest<F>> {
-    const inbox: StreamItem<F>[] = []
-    let wake: (() => void) | null = null
-    const conn: StreamConn<F> = {
-      feed: (item) => {
-        inbox.push(item)
-        wake?.()
-      },
-    }
-    registry.push(conn)
-    if (this.holdStreamOpen && onOpen !== undefined) this.heldOpens.push(onOpen)
-    else if (!this.suppressStreamOpen) onOpen?.()
-    try {
-      while (abortInsensitive || !signal.aborted) {
-        while (inbox.length > 0) {
-          const item = inbox.shift() as StreamItem<F>
-          if (item.kind === 'end') return
-          if (item.kind === 'fail') throw item.error
-          yield item.envelope
+  ): AsyncIterable<RpcRequest<F>> {
+    return {
+      [Symbol.asyncIterator]: () => {
+        const inbox: StreamItem<F>[] = []
+        let closed = false
+        let wake: (() => void) | null = null
+        const conn: StreamConn<F> = {
+          feed: (item) => {
+            if (closed) return
+            inbox.push(item)
+            wake?.()
+          },
         }
-        await new Promise<void>((resolve) => {
-          wake = resolve
-          signal.addEventListener('abort', () => { resolve() }, { once: true })
-        })
-        wake = null
-      }
-    } finally {
-      registry.splice(registry.indexOf(conn), 1)
+        const close = (): void => {
+          if (closed) return
+          closed = true
+          signal.removeEventListener('abort', handleAbort)
+          const index = registry.indexOf(conn)
+          if (index >= 0) registry.splice(index, 1)
+          wake?.()
+        }
+        const handleAbort = (): void => {
+          if (!abortInsensitive) close()
+        }
+        registry.push(conn)
+        signal.addEventListener('abort', handleAbort, { once: true })
+        if (signal.aborted) handleAbort()
+        if (this.holdStreamOpen && onOpen !== undefined) this.heldOpens.push(onOpen)
+        else if (!this.suppressStreamOpen) onOpen?.()
+        return {
+          next: async (): Promise<IteratorResult<RpcRequest<F>>> => {
+            while (!closed) {
+              const item = inbox.shift()
+              if (item?.kind === 'end') {
+                close()
+                break
+              }
+              if (item?.kind === 'fail') {
+                close()
+                throw item.error
+              }
+              if (item?.kind === 'frame') return { done: false, value: item.envelope }
+              await new Promise<void>((resolve) => { wake = resolve })
+              wake = null
+            }
+            return { done: true, value: undefined }
+          },
+          return: (): Promise<IteratorResult<RpcRequest<F>>> => {
+            close()
+            return Promise.resolve({ done: true, value: undefined })
+          },
+        }
+      },
     }
   }
 }

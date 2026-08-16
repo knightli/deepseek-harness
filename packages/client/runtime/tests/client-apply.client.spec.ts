@@ -44,7 +44,12 @@ async function mount(): Promise<Bench> {
     },
     start: (sinks) => {
       bench.sinks = sinks
-      return { stop: () => { bench.stopped += 1 } }
+      return {
+        stop: () => {
+          bench.stopped += 1
+          return Promise.resolve()
+        },
+      }
     },
   }
   ctx.reflect.provide('connection', handle)

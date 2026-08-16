@@ -40,7 +40,7 @@ describe('connection lifecycle', () => {
       expect(api.callsOf('host.describe')).toHaveLength(1)
       expect(descriptions).toEqual([true])
     } finally {
-      controller.stop()
+      await controller.stop()
     }
   })
 
@@ -56,7 +56,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(connected).toBe(2) }) // new generation after backoff
       expect(api.openMuxCount).toBe(1) // the dead generation's stream is gone, exactly one live
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
     // stop() aborts the live generation (streams tear down) and no reconnect follows.
@@ -88,10 +88,44 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(hostSeen.length).toBeGreaterThan(0) })
       expect(hostSeen).toEqual(['current-host'])
     } finally {
-      controller.stop()
+      await controller.stop()
       api.endStreams()
       warnSpy.mockRestore()
     }
+  })
+
+  it('stop closes an abort-insensitive sibling stream before it settles', async () => {
+    const api = new FakeApiClient()
+    api.hostAbortInsensitive = true
+    let connected = 0
+    const controller = new ConnectionController(api, {
+      onConnected: () => { connected += 1 },
+    }, FAST)
+    controller.start()
+    await vi.waitFor(() => { expect(connected).toBe(1) })
+
+    await controller.stop()
+
+    expect(api.openMuxCount).toBe(0)
+    expect(api.openHostCount).toBe(0)
+  })
+
+  it('stop settles while readiness describe and stream-open callbacks remain pending', async () => {
+    const api = new FakeApiClient()
+    const describe = deferred<Awaited<ReturnType<FakeApiClient['onDescribe']>>>()
+    api.onDescribe = () => describe.promise
+    api.suppressStreamOpen = true
+    const controller = new ConnectionController(api, {}, FAST)
+    controller.start()
+    await vi.waitFor(() => {
+      expect(api.openMuxCount).toBe(1)
+      expect(api.openHostCount).toBe(1)
+    })
+
+    await expect(controller.stop()).resolves.toBeUndefined()
+
+    expect(api.openMuxCount).toBe(0)
+    expect(api.openHostCount).toBe(0)
   })
 
   it('treats describe failure as generation failure and retries', async () => {
@@ -112,7 +146,7 @@ describe('connection lifecycle', () => {
       gate.resolve(ok({ version: '0', cwd: '/f', attachedSessions: 0, canOpenPath: true }))
       await vi.waitFor(() => { expect(connected).toBe(1) })
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
   })
@@ -141,7 +175,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(describeCalls).toBe(2) })
       await vi.waitFor(() => { expect(connected).toBe(1) })
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
   })
@@ -162,7 +196,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(connected).toBe(2) }) // treated as loss → reconnect
       expect(muxSeen).toEqual([]) // never forwarded to the business sink
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
   })
@@ -187,7 +221,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(seen).toHaveLength(2) }) // second frame still pumped
       expect(connected).toBe(1) // no reconnect triggered by the sink throw
     } finally {
-      controller.stop()
+      await controller.stop()
       errorSpy.mockRestore()
     }
   })
@@ -205,7 +239,7 @@ describe('connection lifecycle', () => {
       api.releaseStreamOpens()
       await vi.waitFor(() => { expect(connected).toBe(1) })
     } finally {
-      controller.stop()
+      await controller.stop()
     }
   })
 
@@ -236,7 +270,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(connected).toBe(1) })
       expect(states).toEqual(['reconnecting', 'connected'])
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
   })
@@ -250,7 +284,7 @@ describe('connection lifecycle', () => {
     try {
       await vi.waitFor(() => { expect(connected).toBe(1) }) // handshake resolved by the guard, not wedged
     } finally {
-      controller.stop()
+      await controller.stop()
     }
   })
 
@@ -271,7 +305,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(connected).toBe(2) })
       expect(states).toEqual(['connected', 'reconnecting', 'connected'])
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
   })
@@ -284,7 +318,7 @@ describe('connection lifecycle', () => {
       onConnected: () => { connected++ },
       onStateChange: (state) => {
         states.push(state)
-        if (state === 'connected') controller.stop()
+        if (state === 'connected') void controller.stop()
       },
     }, FAST)
 
@@ -319,7 +353,7 @@ describe('connection lifecycle', () => {
       await vi.waitFor(() => { expect(connected).toBe(1) })
       expect(states).toEqual(['reconnecting', 'connected']) // two failures, one reconnecting emission
     } finally {
-      controller.stop()
+      await controller.stop()
       warnSpy.mockRestore()
     }
   })
@@ -333,7 +367,7 @@ describe('connection lifecycle', () => {
       api.pushMux(subscribedFrame()) // pumped with sink undefined: dropped silently
       await new Promise(resolve => setTimeout(resolve, 20))
     } finally {
-      controller.stop()
+      await controller.stop()
     }
   })
 
@@ -348,7 +382,7 @@ describe('connection lifecycle', () => {
       expect(api.openMuxCount).toBe(1)
       expect(api.callsOf('host.describe')).toHaveLength(1)
     } finally {
-      controller.stop()
+      await controller.stop()
     }
   })
 })

@@ -111,7 +111,7 @@ describe('connection client apply', () => {
       expect(handle.hostDescription.getSnapshot()?.canOpenPath).toBe(true)
     })
     expect(handle.connectionState.getSnapshot()).toBe('connected')
-    loop.stop() // teardown must not throw; the fixture streams abort quietly
+    await loop.stop() // teardown must not throw; the fixture streams abort quietly
     expect(handle.hostDescription.getSnapshot()).toBeUndefined()
     expect(handle.connectionState.getSnapshot()).toBeUndefined()
     expect(descriptions).toEqual([true, undefined])
@@ -133,7 +133,7 @@ describe('connection client apply', () => {
     const stopDescription = handle.hostDescription.subscribe(() => {
       if (handle.hostDescription.getSnapshot() === undefined) return
       sawDescription = true
-      owner.loop?.stop()
+      void owner.loop?.stop()
     })
     const connected = vi.fn()
     const loop = handle.start({ onConnected: connected })
@@ -144,7 +144,7 @@ describe('connection client apply', () => {
       expect(connected).not.toHaveBeenCalled()
     } finally {
       stopDescription()
-      loop.stop()
+      await loop.stop()
     }
   })
 
@@ -179,7 +179,7 @@ describe('connection client apply', () => {
       expect(handle.hostDescription.getSnapshot()?.canOpenPath).toBe(true)
     } finally {
       stopDescription()
-      loop.stop()
+      await loop.stop()
       warnSpy.mockRestore()
     }
   })

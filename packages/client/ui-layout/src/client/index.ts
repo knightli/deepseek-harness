@@ -108,6 +108,9 @@ export interface DetailsOwnerProps {}
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
 export const inject = ['slots', 'theme', 'connection']
 
+/** Apply-time context after Cordis has satisfied this plugin's required inject list. */
+type LayoutContext = ClientContext & { readonly connection: ConnectionHandle }
+
 /**
  * Client plugin body: provide ctx.layout, then one register() call — AppFrame
  * into 'root' with the four child-slot declarations, the layout store seat,
@@ -116,7 +119,7 @@ export const inject = ['slots', 'theme', 'connection']
  */
 export function apply(ctx: ClientContext): void {
   const layout = new LayoutController()
-  const connection = ctx.get('connection') as ConnectionHandle
+  const { connection } = ctx as LayoutContext
   ctx.effect(() => {
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({

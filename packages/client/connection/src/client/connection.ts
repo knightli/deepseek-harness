@@ -53,6 +53,11 @@ export interface ConnectionSinks {
   onStateChange?: (state: ConnectionState) => void
 }
 
+interface StreamPump {
+  readonly done: Promise<void>
+  close(): Promise<void>
+}
+
 /**
  * Opens both streams and keeps iterating (pull mode: nothing reads the socket and the tap
  * never fires unless someone for-awaits), reconnecting with exponential backoff on loss.
@@ -64,6 +69,9 @@ export class ConnectionController {
   private generation = 0
   private attempt = 0
   private current: AbortController | null = null
+  private currentPumps: readonly StreamPump[] = []
+  private idle: AbortController | null = null
+  private loopPromise: Promise<void> | null = null
   private running = false
   private lastState: ConnectionState | null = null
   private readonly config: Required<ConnectionConfig>
@@ -80,14 +88,28 @@ export class ConnectionController {
   start(): void {
     if (this.running) return
     this.running = true
-    void this.loop()
+    const loop = this.loop().catch((error: unknown) => {
+      this.running = false
+      this.current?.abort()
+      console.error('[web-runtime] connection loop failed', error)
+    })
+    this.loopPromise = loop
+    void loop.then(() => {
+      if (this.loopPromise === loop) this.loopPromise = null
+    })
   }
 
-  /** Stop the loop and abort the current generation's streams. */
-  stop(): void {
+  /** Stop the loop, close both streams, and settle every pump. */
+  async stop(): Promise<void> {
     this.running = false
     this.current?.abort()
     this.current = null
+    this.idle?.abort()
+    this.idle = null
+    const pumps = this.currentPumps
+    await Promise.all(pumps.map(pump => pump.close()))
+    await Promise.all(pumps.map(pump => pump.done))
+    await this.loopPromise
   }
 
   private backoffDelay(attempt: number): number {
@@ -124,69 +146,86 @@ export class ConnectionController {
         new Promise<void>((resolve) => { hostOpened = resolve }),
       ])
 
+      let settleGeneration!: () => void
       const failed = new Promise<void>((resolve) => {
-        const settle = (): void => {
+        settleGeneration = () => {
           if (gen === this.generation && !ac.signal.aborted) ac.abort()
           resolve()
         }
-        const muxSink = this.sinks.onMuxEnvelope
-        const hostSink = this.sinks.onHostEnvelope
-        void this.pumpStream(
+      })
+      const muxSink = this.sinks.onMuxEnvelope
+      const hostSink = this.sinks.onHostEnvelope
+      const pumps = [
+        this.pumpStream(
           this.api.events.mux({}, ac.signal, muxOpened),
           muxSink === undefined
             ? undefined
             : (envelope) => {
               if (gen === this.generation && this.isGenerationActive(ac)) muxSink(envelope)
             },
-          settle,
-        )
-        void this.pumpStream(
+          settleGeneration,
+        ),
+        this.pumpStream(
           this.api.events.host({}, ac.signal, hostOpened),
           hostSink === undefined
             ? undefined
             : (envelope) => {
               if (gen === this.generation && this.isGenerationActive(ac)) hostSink(envelope)
             },
-          settle,
-        )
-      })
+          settleGeneration,
+        ),
+      ]
+      this.currentPumps = pumps
 
+      const timeout = new AbortController()
       try {
         // Strict readiness handshake: describe proves unary reachability, onOpen
         // proves each physical stream is established before any frame —
         // only then may onConnected fire, so the resync it triggers cannot outrun the
         // subscribed baseline. The timeout guards against a carrier that never fires onOpen
         // (see ConnectionConfig.streamOpenTimeoutMs).
-        const timeout = new AbortController()
-        const [description] = await Promise.all([
+        const readiness = Promise.all([
           this.api.host.describe({}),
           Promise.race([streamsOpen, sleep(this.config.streamOpenTimeoutMs, timeout.signal)]),
         ])
-        timeout.abort()
-        const descriptionResult = description.result
-        if (!descriptionResult.ok) {
-          throw new Error(`host.describe failed: ${descriptionResult.error.code}: ${descriptionResult.error.message}`)
-        }
-        if (ac.signal.aborted) throw new Error('generation aborted during readiness handshake')
-        this.attempt = 0
-        this.emitState('connected')
-        // A state sink may synchronously stop this controller. Do not publish
-        // a description for a generation that no longer exists afterward.
-        if (this.isGenerationActive(ac)) {
-          this.callSink(() => { this.sinks.onConnected?.(descriptionResult.value) })
+        const outcome = await Promise.race([
+          readiness.then(([description]) => ({ kind: 'ready' as const, description })),
+          failed.then(() => ({ kind: 'failed' as const })),
+        ])
+        if (outcome.kind === 'ready') {
+          const descriptionResult = outcome.description.result
+          if (!descriptionResult.ok) {
+            throw new Error(`host.describe failed: ${descriptionResult.error.code}: ${descriptionResult.error.message}`)
+          }
+          if (ac.signal.aborted) throw new Error('generation aborted during readiness handshake')
+          this.attempt = 0
+          this.emitState('connected')
+          // A state sink may synchronously stop this controller. Do not publish
+          // a description for a generation that no longer exists afterward.
+          if (this.isGenerationActive(ac)) {
+            this.callSink(() => { this.sinks.onConnected?.(descriptionResult.value) })
+          }
         }
       } catch {
         // Transport failure: treat as generation failure, fall through to the shared backoff.
         if (!ac.signal.aborted) ac.abort()
+      } finally {
+        timeout.abort()
       }
 
       await failed
+      ac.abort()
+      await Promise.all(pumps.map(pump => pump.close()))
+      await Promise.all(pumps.map(pump => pump.done))
+      if (this.currentPumps === pumps) this.currentPumps = []
       if (!this.isRunning()) return
       this.emitState('reconnecting')
       this.attempt += 1
       console.warn(`[web-runtime] connection lost, retry #${this.attempt}`)
       const idle = new AbortController()
+      this.idle = idle
       await sleep(this.backoffDelay(this.attempt), idle.signal)
+      if (this.idle === idle) this.idle = null
     }
   }
 
@@ -197,20 +236,39 @@ export class ConnectionController {
     this.callSink(() => this.sinks.onStateChange?.(state))
   }
 
-  private async pumpStream<F extends { type: string }>(
+  private pumpStream<F extends { type: string }>(
     stream: AsyncIterable<RpcRequest<F>>,
     sink: ((envelope: RpcRequest<F>) => void) | undefined,
     onEnd: () => void,
-  ): Promise<void> {
-    try {
-      for await (const envelope of stream) {
-        if (envelope.payload.type === 'stream/error') break
-        if (sink !== undefined) this.callSink(() => { sink(envelope) })
-      }
-    } catch {
-      // Stream loss: converge on onEnd, which triggers the shared reconnect.
+  ): StreamPump {
+    const iterator = stream[Symbol.asyncIterator]()
+    let closing: Promise<void> | undefined
+    const close = (): Promise<void> => {
+      closing ??= (async () => {
+        try {
+          await iterator.return?.()
+        } catch {
+          // Stream closure converges with the pump's ordinary loss path.
+        }
+      })()
+      return closing
     }
-    onEnd()
+    const done = (async () => {
+      try {
+        while (true) {
+          const next = await iterator.next()
+          if (next.done) break
+          const envelope = next.value
+          if (envelope.payload.type === 'stream/error') break
+          if (sink !== undefined) this.callSink(() => { sink(envelope) })
+        }
+      } catch {
+        // Stream loss: converge on onEnd, which triggers the shared reconnect.
+      } finally {
+        onEnd()
+      }
+    })()
+    return { done, close }
   }
 
   /** Sink exception isolation: a business-layer throw is logged only, never affecting pump or reconnect semantics. */

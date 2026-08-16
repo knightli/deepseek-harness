@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-16-reconnect-generation-interaction-ownership.md
-2026-08-16-reconnect-generation-interaction-ownership.md: f5bcd781dc5ef908d8de27e7dde5c475dc94bcb5
-2026-08-16-reconnect-generation-interaction-ownership.zh.md: 39216ec4aec7cb0e962d44511af93746b2c5a414
+2026-08-16-reconnect-generation-interaction-ownership.md: f7893cc748315d866645f5042e1c8bdae5a016c8
+2026-08-16-reconnect-generation-interaction-ownership.zh.md: 2d8f4f7a1cce3e76c59b4145d6eb845d152a3dd4
