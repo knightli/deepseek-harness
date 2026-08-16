@@ -65,6 +65,35 @@ describe('connection lifecycle', () => {
     expect(api.openMuxCount).toBe(0)
   })
 
+  it('drops late frames from an aborted sibling stream after a new generation starts', async () => {
+    const api = new FakeApiClient()
+    api.hostAbortInsensitive = true
+    const generations: number[] = []
+    const hostSeen: string[] = []
+    let connected = 0
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const controller = new ConnectionController(api, {
+      onGenerationStart: generation => generations.push(generation),
+      onHostEnvelope: envelope => hostSeen.push(envelope.rpcId),
+      onConnected: () => { connected += 1 },
+    }, FAST)
+    controller.start()
+    try {
+      await vi.waitFor(() => { expect(connected).toBe(1) })
+      api.endMuxStreams()
+      await vi.waitFor(() => { expect(generations).toEqual([1, 2]) })
+      await vi.waitFor(() => { expect(connected).toBe(2) })
+
+      api.pushHost({ type: 'host/session-added', sessionId: SID, blank: false }, 'current-host')
+      await vi.waitFor(() => { expect(hostSeen.length).toBeGreaterThan(0) })
+      expect(hostSeen).toEqual(['current-host'])
+    } finally {
+      controller.stop()
+      api.endStreams()
+      warnSpy.mockRestore()
+    }
+  })
+
   it('treats describe failure as generation failure and retries', async () => {
     const api = new FakeApiClient()
     const gate = deferred<Awaited<ReturnType<FakeApiClient['onDescribe']>>>()
@@ -274,15 +303,18 @@ describe('connection lifecycle', () => {
       return describeCalls <= 2 ? Promise.reject(new Error('down')) : gate.promise
     }
     const states: ConnectionState[] = []
+    const generations: number[] = []
     let connected = 0
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const controller = new ConnectionController(api, {
+      onGenerationStart: generation => generations.push(generation),
       onConnected: () => { connected++ },
       onStateChange: state => states.push(state),
     }, FAST)
     controller.start()
     try {
       await vi.waitFor(() => { expect(describeCalls).toBe(3) })
+      expect(generations).toEqual([1, 2, 3])
       gate.resolve(ok({ version: '0', cwd: '/f', attachedSessions: 0, canOpenPath: true }))
       await vi.waitFor(() => { expect(connected).toBe(1) })
       expect(states).toEqual(['reconnecting', 'connected']) // two failures, one reconnecting emission

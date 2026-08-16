@@ -197,11 +197,16 @@ export function apply(ctx: Context): void {
     identity: candidate => sessions.scopeOf(candidate),
   })
   const workspaces = new WorkspaceRuntime(ctx, connection.api, sessions)
+  let connectionGeneration = 0
   ctx.effect(
     () => workspaces.startInitialSelection(),
     'runtime: initial Workspace selection',
   )
   const loop = connection.start({
+    onGenerationStart: (generation) => {
+      connectionGeneration = generation
+      sessions.handleGenerationStart(generation)
+    },
     onMuxEnvelope: (envelope) => {
       sessions.handleMuxEnvelope(envelope)
     },
@@ -216,7 +221,7 @@ export function apply(ctx: Context): void {
       if (frame.type === 'host/remote-event') ctx.remote.$dispatch(frame.event, frame.args)
     },
     onConnected: () => {
-      sessions.handleConnected()
+      sessions.handleConnected(connectionGeneration)
       workspaces.handleConnected()
       ctx.emit('connection/reset')
     },

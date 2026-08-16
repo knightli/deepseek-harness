@@ -230,6 +230,8 @@ export class FakeApiClient implements IApiClient {
   /** When true, onOpen callbacks are parked instead of fired; releaseStreamOpens() fires them.
    *  Lets a case hold the readiness handshake open (describe done, streams not yet "established"). */
   holdStreamOpen = false
+  /** Test-only hostile carrier mode: host iteration may yield after its AbortSignal fires. */
+  hostAbortInsensitive = false
   private heldOpens: (() => void)[] = []
 
   releaseStreamOpens(): void {
@@ -242,7 +244,7 @@ export class FakeApiClient implements IApiClient {
     mux: (_payload: unknown, signal: AbortSignal, onOpen?: () => void) =>
       this.openStream(this.muxConns, signal, onOpen),
     host: (_payload: unknown, signal: AbortSignal, onOpen?: () => void) =>
-      this.openStream(this.hostConns, signal, onOpen),
+      this.openStream(this.hostConns, signal, onOpen, this.hostAbortInsensitive),
   }
 
   respond(): Promise<{ accepted: false; reason: 'not-pending' }> {
@@ -263,6 +265,11 @@ export class FakeApiClient implements IApiClient {
     for (const conn of [...this.muxConns, ...this.hostConns]) conn.feed({ kind: 'end' })
   }
 
+  /** End only mux streams so an abort-insensitive host sibling can outlive its generation. */
+  endMuxStreams(): void {
+    for (const conn of [...this.muxConns]) conn.feed({ kind: 'end' })
+  }
+
   failStreams(error: unknown): void {
     for (const conn of [...this.muxConns, ...this.hostConns]) conn.feed({ kind: 'fail', error })
   }
@@ -280,7 +287,12 @@ export class FakeApiClient implements IApiClient {
     return response
   }
 
-  private async *openStream<F>(registry: StreamConn<F>[], signal: AbortSignal, onOpen?: () => void): AsyncGenerator<RpcRequest<F>> {
+  private async *openStream<F>(
+    registry: StreamConn<F>[],
+    signal: AbortSignal,
+    onOpen?: () => void,
+    abortInsensitive = false,
+  ): AsyncGenerator<RpcRequest<F>> {
     const inbox: StreamItem<F>[] = []
     let wake: (() => void) | null = null
     const conn: StreamConn<F> = {
@@ -293,7 +305,7 @@ export class FakeApiClient implements IApiClient {
     if (this.holdStreamOpen && onOpen !== undefined) this.heldOpens.push(onOpen)
     else if (!this.suppressStreamOpen) onOpen?.()
     try {
-      while (!signal.aborted) {
+      while (abortInsensitive || !signal.aborted) {
         while (inbox.length > 0) {
           const item = inbox.shift() as StreamItem<F>
           if (item.kind === 'end') return

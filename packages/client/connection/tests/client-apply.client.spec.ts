@@ -89,25 +89,39 @@ describe('connection client apply', () => {
     const handle = await mount()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const descriptions: Array<boolean | undefined> = []
+    const states: Array<string | undefined> = []
     const stopThrowing = handle.hostDescription.subscribe(() => { throw new Error('subscriber bug') })
     const stopDescription = handle.hostDescription.subscribe(() => {
       descriptions.push(handle.hostDescription.getSnapshot()?.canOpenPath)
     })
+    const stopState = handle.connectionState.subscribe(() => {
+      states.push(handle.connectionState.getSnapshot())
+    })
     expect(handle.hostDescription.getSnapshot()).toBeUndefined()
+    expect(handle.connectionState.getSnapshot()).toBeUndefined()
     // config omitted: the `config ?? {}` default arm is part of the surface.
     let connected = 0
-    const loop = handle.start({ onConnected: () => { connected++ } })
+    const lifecycle: string[] = []
+    const loop = handle.start({
+      onGenerationStart: generation => lifecycle.push(`generation:${generation}`),
+      onConnected: () => { connected++; lifecycle.push('connected') },
+    })
     expect(() => handle.start({})).toThrow(/already owned by another consumer/)
     await vi.waitFor(() => {
       expect(handle.hostDescription.getSnapshot()?.canOpenPath).toBe(true)
     })
+    expect(handle.connectionState.getSnapshot()).toBe('connected')
     loop.stop() // teardown must not throw; the fixture streams abort quietly
     expect(handle.hostDescription.getSnapshot()).toBeUndefined()
+    expect(handle.connectionState.getSnapshot()).toBeUndefined()
     expect(descriptions).toEqual([true, undefined])
+    expect(states).toEqual(['connected', undefined])
     expect(connected).toBe(1)
+    expect(lifecycle).toEqual(['generation:1', 'connected'])
     expect(errorSpy).toHaveBeenCalledTimes(2)
     stopThrowing()
     stopDescription()
+    stopState()
     errorSpy.mockRestore()
   })
 

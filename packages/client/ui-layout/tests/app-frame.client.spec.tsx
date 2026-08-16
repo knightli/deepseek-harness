@@ -20,11 +20,13 @@ import { createLayoutStore } from '@deepseek-ai/dsh-client-ui-layout/src/client/
 import type {
   SessionId, SessionListState, WorkspaceListState,
 } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConnectionState } from '@deepseek-ai/dsh-client-connection/client'
 
 // Session selection controls for the SessionProvider and useSessions stubs.
 const selectedSession = { current: 's-test' as SessionId | undefined }
 const selectedSessionBlank = { current: false }
 const baselinesReady = { current: true }
+const connectionState = { current: 'connected' as ConnectionState | undefined }
 
 // Render-prop contract stub fed through the standard seat prop (the renderer
 // injects the real one in production): session mode runs children(id), empty
@@ -58,7 +60,7 @@ function mountFrame() {
   const slotCalls: { key: string; props: unknown }[] = []
   const renderSlot = ((key: string, owner: object) => {
     slotCalls.push({ key, props: owner })
-    if (key === 'sidebar') return <div data-testid="sidebar-content" />
+    if (key === 'sidebar') return <button data-testid="sidebar-content">Sidebar</button>
     if (key === 'conversation') return <div data-testid="center-content" />
     if (key === 'details') return <div data-testid="details-content" />
     if (key === 'conversation.empty') return <div data-testid="empty-content" />
@@ -80,6 +82,7 @@ function mountFrame() {
     items: [], archivedSessionIds: [], state: 'idle', phase: 'ready', error: null,
     baselinesReady: baselinesReady.current, recentWorkspaceId: undefined,
   }
+  const useConnectionState: AppFrameProps['useConnectionState'] = selector => selector(connectionState.current)
   const element = () => (
     <AppFrame
       useStore={hookOf(instance)}
@@ -88,6 +91,7 @@ function mountFrame() {
       useSessions={useSessions}
       useWorkspaces={((sel: (s: WorkspaceListState) => unknown) => sel(workspaceState)) as never}
       SessionProvider={SessionProviderStub}
+      useConnectionState={useConnectionState}
     />
   )
   const utils = render(element())
@@ -115,6 +119,7 @@ beforeEach(() => {
   selectedSession.current = 's-test' as SessionId
   selectedSessionBlank.current = false
   baselinesReady.current = true
+  connectionState.current = 'connected'
   vi.useFakeTimers()
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => { cb(0) }, 16) as unknown as number)
@@ -137,6 +142,27 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it('shows reconnect status and makes the native frame inert until the connection recovers', () => {
+    const view = mountFrame()
+    const frame = view.container.querySelector('fieldset') as HTMLFieldSetElement
+    expect(frame.disabled).toBe(false)
+    expect(frame.inert).toBe(false)
+    expect(view.queryByText(/重连/)).toBeNull()
+
+    connectionState.current = 'reconnecting'
+    view.rerenderFrame()
+    expect(view.getByText(/重连/)).toBeTruthy()
+    expect(frame.disabled).toBe(true)
+    expect(frame.inert).toBe(true)
+    expect(view.getByTestId('sidebar-content').matches(':disabled')).toBe(true)
+
+    connectionState.current = 'connected'
+    view.rerenderFrame()
+    expect(view.queryByText(/重连/)).toBeNull()
+    expect(frame.disabled).toBe(false)
+    expect(frame.inert).toBe(false)
+  })
+
   it('renders three tracks from store state', () => {
     const { frame } = mountFrame()
     expect(tracks(frame)).toEqual([280, 0])

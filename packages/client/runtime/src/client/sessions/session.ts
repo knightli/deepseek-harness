@@ -33,6 +33,10 @@ export const PAGE_MESSAGES = 50
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {
+  /** Physical connection generation active when this resident object is materialized. */
+  connectionGeneration?: number
+  /** Whether that generation completed the connection readiness handshake. */
+  connectionReady?: boolean
   /** Catalog-discovered address selecting non-activating subagent transport. */
   address?: SubagentAddress
   /** Whether the exact direct parent Agent was live at the latest catalog read. */
@@ -78,9 +82,13 @@ export class Session implements SessionFace {
    *  passes drop all writes once the generation moves on. */
   private openGeneration = 0
   private loadingOlder = false
-  private pending = new Map<string, PendingInteraction>()
+  private pending = new Map<string, { generation: number; wait: PendingInteraction }>()
   private pendingRev = 0
   private pendingCache: { rev: number; value: PendingInteraction[] } | null = null
+  /** Latest physical connection generation; zero is the direct-object/test lifecycle. */
+  private connectionGeneration = 0
+  /** The sole generation whose interaction responses may reach the carrier. */
+  private answerableGeneration: number | null = 0
   /** Authoritative stream-only inbox snapshot; pending work never hits history. */
   private readonly queueMirror = new SessionQueueMirror()
   /** Session-owned business Context engine over the contiguous raw window. */
@@ -145,6 +153,8 @@ export class Session implements SessionFace {
     private readonly remote: SessionRemotes,
     private readonly options: SessionOptions = {},
   ) {
+    this.connectionGeneration = options.connectionGeneration ?? 0
+    this.answerableGeneration = options.connectionReady === false ? null : this.connectionGeneration
     this.projections = options.projections ?? new ProjectionValueStore()
     this.address = options.address
     this.parentAvailable = options.parentAvailable ?? false
@@ -413,7 +423,11 @@ export class Session implements SessionFace {
    *  reset the window and rerun open; pending waits for the baseline replay. Invalidates any
    *  in-flight open first — its history request rode the dead connection and must not settle
    *  the fresh generation into 'error'. */
-  async resync(): Promise<void> {
+  /**
+   * Rebuild the history window while retaining only waits replayed by the ready connection.
+   * @param connectionGeneration - ready generation whose replayed waits remain answerable.
+   */
+  async resync(connectionGeneration?: number): Promise<void> {
     // The queue mirror is NOT cleared here: onConnected (which drives resync)
     // races the mux frames — the fresh generation's baseline may have landed
     // already, and the host never resends it. The mirror re-baselines on the
@@ -427,10 +441,16 @@ export class Session implements SessionFace {
     this.events = []
     this.views = []
     this.baseSeq = 0
-    // Superseded, not settled: the baseline replay re-sends still-pending requested frames verbatim
-    // (same rpcId), re-minting fresh waits; a stale reference's respond() still reaches the host.
-    this.pending.clear()
-    this.pendingRev++
+    // A connection resync keeps current-generation replay that arrived before
+    // readiness and drops only stale generations. Other rebuild callers retain
+    // the original full-clear behavior.
+    let pendingChanged = false
+    for (const [key, entry] of this.pending) {
+      if (connectionGeneration !== undefined && entry.generation === connectionGeneration) continue
+      this.pending.delete(key)
+      pendingChanged = true
+    }
+    if (pendingChanged) this.pendingRev++
     this.subscribedLastSeq = null
     this.liveBuffer = []
     this.notifier.markDirty()
@@ -460,6 +480,30 @@ export class Session implements SessionFace {
   // ---- Manager-only entry points (@internal; never called by the UI) ----
 
   /**
+   * Mark a physical connection attempt before any frame from it can arrive.
+   * @param generation - physical connection generation beginning before stream delivery.
+   */
+  handleGenerationStart(generation: number): void {
+    this.connectionGeneration = generation
+    this.answerableGeneration = null
+  }
+
+  /** Preserve visible waits while making every retained carrier locally unavailable. */
+  handleDisconnected(): void {
+    this.answerableGeneration = null
+  }
+
+  /**
+   * Admit responses for the ready generation and rebuild around its replayed baseline.
+   * @param generation - physical connection generation whose readiness handshake completed.
+   */
+  handleConnected(generation: number): void {
+    if (generation !== this.connectionGeneration) return
+    this.answerableGeneration = generation
+    void this.resync(generation)
+  }
+
+  /**
    * Mux frame arrival (the dispatch switch).
    * @param rpcId - the frame envelope id (the respond backfill key for requested frames).
    * @param frame - the routed frame.
@@ -486,12 +530,16 @@ export class Session implements SessionFace {
       }
       case 'approval/requested': {
         const { type: _type, sessionId: _sid, ...payload } = frame
-        this.mint(new PendingWait('approval', rpcId, this.sessionId, payload, m => this.api.respond(m)))
+        const generation = this.connectionGeneration
+        this.mint(
+          new PendingWait('approval', rpcId, this.sessionId, payload, m => this.respondPending(generation, m)),
+          generation,
+        )
         this.notifier.markDirty()
         return
       }
       case 'approval/resolved': {
-        for (const item of this.pending.values()) {
+        for (const { wait: item } of this.pending.values()) {
           if (item.kind === 'approval' && item.payload.approvalId === frame.approvalId) this.settle(item)
         }
         this.notifier.markDirty()
@@ -499,12 +547,16 @@ export class Session implements SessionFace {
       }
       case 'question/requested': {
         const { type: _type, sessionId: _sid, ...payload } = frame
-        this.mint(new PendingWait('question', rpcId, this.sessionId, payload, m => this.api.respond(m)))
+        const generation = this.connectionGeneration
+        this.mint(
+          new PendingWait('question', rpcId, this.sessionId, payload, m => this.respondPending(generation, m)),
+          generation,
+        )
         this.notifier.markDirty()
         return
       }
       case 'question/resolved': {
-        const item = this.pending.get(`q:${frame.questionRpcId}`)
+        const item = this.pending.get(`q:${frame.questionRpcId}`)?.wait
         if (item !== undefined) this.settle(item)
         this.notifier.markDirty()
         return
@@ -597,8 +649,8 @@ export class Session implements SessionFace {
   // ---- Private ----
 
   /** Requested-frame arrival: the wait enters the pending map under its own key. */
-  private mint(wait: PendingInteraction): void {
-    this.pending.set(wait.key, wait)
+  private mint(wait: PendingInteraction, generation: number): void {
+    this.pending.set(wait.key, { generation, wait })
     this.pendingRev++
   }
 
@@ -607,6 +659,17 @@ export class Session implements SessionFace {
     wait.markSettled()
     this.pending.delete(wait.key)
     this.pendingRev++
+  }
+
+  /** Generation fence around the generic response carrier. */
+  private respondPending(
+    generation: number,
+    message: Parameters<IApiClient['respond']>[0],
+  ): ReturnType<IApiClient['respond']> {
+    if (this.answerableGeneration !== generation) {
+      return Promise.reject(new Error('pending interaction is unavailable on this connection generation'))
+    }
+    return this.api.respond(message)
   }
 
   /** @param generation - openGeneration at launch; every await re-checks it and a stale pass
@@ -730,7 +793,7 @@ export class Session implements SessionFace {
 
   private buildSnapshot(): ConversationSnapshot {
     if (this.pendingCache === null || this.pendingCache.rev !== this.pendingRev) {
-      this.pendingCache = { rev: this.pendingRev, value: [...this.pending.values()] }
+      this.pendingCache = { rev: this.pendingRev, value: [...this.pending.values()].map(entry => entry.wait) }
     }
     const chat = (this.conversation.snapshot('chat') as ChatSnapshot | undefined) ?? EMPTY_CHAT_SNAPSHOT
     const legacy = chat.legacy

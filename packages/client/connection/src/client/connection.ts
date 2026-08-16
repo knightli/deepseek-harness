@@ -42,6 +42,8 @@ export type ConnectionState = 'connected' | 'reconnecting'
 /** Frame sink callbacks: the Controller owns the physical streams; business dispatch belongs to
  *  SessionManager. */
 export interface ConnectionSinks {
+  /** Every physical connection generation, before either stream can deliver a frame. */
+  onGenerationStart?: (generation: number) => void
   onMuxEnvelope?: (envelope: RpcRequest<MuxFrame>) => void
   onHostEnvelope?: (envelope: RpcRequest<HostFrame>) => void
   /** After each connection generation is established (both streams open + describe succeeded), first connect included. */
@@ -109,6 +111,8 @@ export class ConnectionController {
       const gen = ++this.generation
       const ac = new AbortController()
       this.current = ac
+      this.callSink(() => { this.sinks.onGenerationStart?.(gen) })
+      if (!this.isGenerationActive(ac)) return
 
       /* v8 ignore next -- initializer placeholder: the Promise executor
        * below runs synchronously and replaces it before anyone can call it. */
@@ -125,8 +129,26 @@ export class ConnectionController {
           if (gen === this.generation && !ac.signal.aborted) ac.abort()
           resolve()
         }
-        void this.pumpStream(this.api.events.mux({}, ac.signal, muxOpened), this.sinks.onMuxEnvelope, settle)
-        void this.pumpStream(this.api.events.host({}, ac.signal, hostOpened), this.sinks.onHostEnvelope, settle)
+        const muxSink = this.sinks.onMuxEnvelope
+        const hostSink = this.sinks.onHostEnvelope
+        void this.pumpStream(
+          this.api.events.mux({}, ac.signal, muxOpened),
+          muxSink === undefined
+            ? undefined
+            : (envelope) => {
+              if (gen === this.generation && this.isGenerationActive(ac)) muxSink(envelope)
+            },
+          settle,
+        )
+        void this.pumpStream(
+          this.api.events.host({}, ac.signal, hostOpened),
+          hostSink === undefined
+            ? undefined
+            : (envelope) => {
+              if (gen === this.generation && this.isGenerationActive(ac)) hostSink(envelope)
+            },
+          settle,
+        )
       })
 
       try {

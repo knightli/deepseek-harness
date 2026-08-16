@@ -49,6 +49,14 @@ export interface HostDescriptionSource {
   subscribe(listener: () => void): () => void
 }
 
+/** Observable coarse connection state; absent before first transition and after stop. */
+export interface ConnectionStateSource {
+  /** Latest state transition, or undefined outside a running connection lifecycle. */
+  getSnapshot(): ConnectionState | undefined
+  /** Subscribe to state replacement and lifecycle stop. */
+  subscribe(listener: () => void): () => void
+}
+
 /** Required services (none — this is the wire root). */
 export const inject: string[] = []
 
@@ -64,6 +72,8 @@ export interface ConnectionHandle {
   readonly isLoopback: boolean
   /** Generation-scoped Host facts, including native path-open capability. */
   readonly hostDescription: HostDescriptionSource
+  /** Coarse connection state for shell outage presentation and action locking. */
+  readonly connectionState: ConnectionStateSource
   /** Generic logical RPC channels over the same Connection transport. */
   readonly rpc: ClientConnectionRpc
   /**
@@ -89,7 +99,9 @@ export function apply(ctx: Context): void {
   const rpc = fixtureClient?.rpc ?? createWebConnectionRpc()
   let started = false
   let description: HostDescription | undefined
+  let connectionState: ConnectionState | undefined
   const descriptionListeners = new Set<() => void>()
+  const stateListeners = new Set<() => void>()
   const publishDescription = (next: HostDescription | undefined): void => {
     if (Object.is(description, next)) return
     description = next
@@ -101,6 +113,17 @@ export function apply(ctx: Context): void {
       }
     }
   }
+  const publishConnectionState = (next: ConnectionState | undefined): void => {
+    if (Object.is(connectionState, next)) return
+    connectionState = next
+    for (const listener of [...stateListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('[web-runtime] connection-state listener threw:', error)
+      }
+    }
+  }
   const handle: ConnectionHandle = {
     api,
     isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
@@ -109,6 +132,13 @@ export function apply(ctx: Context): void {
       subscribe: (listener) => {
         descriptionListeners.add(listener)
         return () => { descriptionListeners.delete(listener) }
+      },
+    },
+    connectionState: {
+      getSnapshot: () => connectionState,
+      subscribe: (listener) => {
+        stateListeners.add(listener)
+        return () => { stateListeners.delete(listener) }
       },
     },
     rpc,
@@ -127,6 +157,8 @@ export function apply(ctx: Context): void {
           sinks.onConnected?.(next)
         },
         onStateChange: (state) => {
+          publishConnectionState(state)
+          if (connectionState !== state) return
           if (state === 'reconnecting') publishDescription(undefined)
           sinks.onStateChange?.(state)
         },
@@ -136,6 +168,7 @@ export function apply(ctx: Context): void {
         stop: () => {
           controller.stop()
           publishDescription(undefined)
+          publishConnectionState(undefined)
         },
       }
     },

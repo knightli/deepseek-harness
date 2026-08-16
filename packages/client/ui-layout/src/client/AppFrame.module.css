@@ -1,4 +1,8 @@
 .frame {
+  margin: 0;
+  min-inline-size: 0;
+  border: 0;
+  padding: 0;
   position: relative; /* anchors the drag handles, which straddle column borders */
   display: grid;
   grid-template-rows: 100%;
@@ -8,6 +12,10 @@
   /* Collapse/expand animates the tracks on the deepsuite sider curve
      (--ds-ease-in-out / --ds-transition-duration-slow, ui-theme base.css). */
   transition: grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out);
+}
+
+.frame:disabled {
+  pointer-events: none;
 }
 
 /* Dragging writes widths at pointer cadence; easing them would detach the

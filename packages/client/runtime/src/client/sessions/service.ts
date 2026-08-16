@@ -461,12 +461,23 @@ export class SessionRuntime implements ISessions {
     this.manager.handleHostEnvelope(envelope)
   }
 
-  /** Rebuild the Session baseline and every opened window after connection. */
-  handleConnected(): void {
-    this.manager.handleConnected()
+  /**
+   * Mark a physical connection attempt before any stream frame can arrive.
+   * @param generation - physical connection generation beginning before stream delivery.
+   */
+  handleGenerationStart(generation: number): void {
+    this.manager.handleGenerationStart(generation)
   }
 
-  /** Drop generation-scoped live interaction state the moment a connection generation dies. */
+  /**
+   * Rebuild the Session baseline and every opened window after connection.
+   * @param generation - ready physical connection generation; omitted for the current generation.
+   */
+  handleConnected(generation?: number): void {
+    this.manager.handleConnected(generation)
+  }
+
+  /** Preserve visible interactions but fence their carriers when a generation dies. */
   handleDisconnected(): void {
     this.manager.handleDisconnected()
   }

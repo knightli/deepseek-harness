@@ -7,21 +7,32 @@
  * session-aware occupants render in fixed column positions; strict entries
  * gate themselves on current-session availability while session-maybe
  * entries retain identity. Pure component: everything arrives
- * through the three framework shares — zero cordis or framework imports,
+ * through the four framework shares — zero cordis or framework imports,
  * zero self-made hooks.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ConnectionStateSource } from '@deepseek-ai/dsh-client-connection/client'
+import { ConnectionBanner } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { InjectFace, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
 
-/** Full composed props: runtime share + child-slot render share + store share. */
+/** Registration-private connection state bound to a selector hook by the slot renderer. */
+export interface AppFrameInjected {
+  hooks: {
+    /** Coarse connection lifecycle used only for outage presentation and action locking. */
+    connectionState: ConnectionStateSource
+  }
+}
+
+/** Full composed props: runtime share + child-slot render share + store share + injected hook. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
   & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
+  & InjectFace<AppFrameInjected>
 
 /** Center column grid item (session-body building block). */
 function CenterColumn(props: { children?: ReactNode }) {
@@ -87,16 +98,25 @@ function DragHandle(props: { side: 'sidebar' | 'details'; left: number; onStart:
 export function AppFrame({
   useStore,
   useSessions,
+  useConnectionState,
   actions,
   renderSlot,
 }: AppFrameProps) {
+  const reconnecting = useConnectionState(state => state === 'reconnecting')
   const panels = useStore(s => s)
   const detailsSession = useSessions((s) => {
     const current = s.current
     return current !== undefined && s.byId[current]?.blank === false ? current : undefined
   })
-  const frameRef = useRef<HTMLDivElement | null>(null)
+  const frameRef = useRef<HTMLFieldSetElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current
+    /* v8 ignore next -- the frame fieldset is mounted for the component's whole lifetime. */
+    if (frame === null) return
+    frame.inert = reconnecting
+  }, [reconnecting])
 
   const lastSession = useRef(detailsSession)
   useLayoutEffect(() => {
@@ -110,7 +130,7 @@ export function AppFrame({
   // Track the frame's own box (not the window): rAF-throttled ResizeObserver.
   useEffect(() => {
     const el = frameRef.current
-    /* v8 ignore next -- the ref is always attached by effect time: the frame div renders unconditionally. */
+    /* v8 ignore next -- the ref is always attached by effect time: the frame fieldset renders unconditionally. */
     if (el === null) return
     let raf: number | null = null
     const observer = new ResizeObserver(() => {
@@ -162,40 +182,44 @@ export function AppFrame({
   }, [actions])
 
   return (
-    <div
-      ref={frameRef}
-      className={css.frame}
-      style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
-      data-sidebar-collapsed={sidebarCollapsed || undefined}
-      data-details-collapsed={cols.details === 0 || undefined}
-      data-dragging={dragging || undefined}
-    >
-      <div className={css.sidebarCol}>
-        {/* Render-site slot call with live concession output: a closed
+    <>
+      <ConnectionBanner reconnecting={reconnecting} />
+      <fieldset
+        ref={frameRef}
+        className={css.frame}
+        style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
+        disabled={reconnecting}
+        data-sidebar-collapsed={sidebarCollapsed || undefined}
+        data-details-collapsed={cols.details === 0 || undefined}
+        data-dragging={dragging || undefined}
+      >
+        <div className={css.sidebarCol}>
+          {/* Render-site slot call with live concession output: a closed
             sidebar keeps the mounted slot at the compact-rail width, and the
             component sees its rendered state as owner params decided here
             (collapsed follows the resolved rail, so a derived auto-collapse
             renders the rail UI too). */}
-        {renderSlot('sidebar', {
-          collapsed: sidebarCollapsed,
-          width: cols.sidebar,
-        })}
-      </div>
-      <>
-        {/* Both column occupants stay at fixed tree positions from first
+          {renderSlot('sidebar', {
+            collapsed: sidebarCollapsed,
+            width: cols.sidebar,
+          })}
+        </div>
+        <>
+          {/* Both column occupants stay at fixed tree positions from first
             paint — no loading gate: a bare status line reads worse than
             the shell's own pending rendering. The conversation
             is session-maybe; the strict details entry naturally renders
             empty while no session is current. */}
-        <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
-        <DetailsColumn>{renderSlot('details', {})}</DetailsColumn>
-      </>
-      <div className={css.overlayLayer} data-shell-overlay>
-        {renderSlot('shell.overlay', {})}
-      </div>
-      {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
-    </div>
+          <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
+          <DetailsColumn>{renderSlot('details', {})}</DetailsColumn>
+        </>
+        <div className={css.overlayLayer} data-shell-overlay>
+          {renderSlot('shell.overlay', {})}
+        </div>
+        {/* The collapsed rail is fixed-width: no resize handle while closed. */}
+        {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+        {cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
+      </fieldset>
+    </>
   )
 }

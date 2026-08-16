@@ -5,7 +5,7 @@
  * `connection/reset` for generation-scoped cache invalidation.
  */
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ConnectionHandle, ConnectionSinks } from '@deepseek-ai/dsh-api-remotes/client'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 // Type-only: the api-remotes facade carries both the allowlist's selection seat
@@ -43,6 +43,7 @@ void forwardedEventContracts
 
 interface Bench {
   ctx: Context
+  api: FakeApiClient
   sinks: ConnectionSinks | undefined
   /** Every `$dispatch` the runtime made, as `[event, ...args]`. */
   dispatched: unknown[][]
@@ -52,7 +53,7 @@ async function mount(): Promise<Bench> {
   const ctx = new Context()
   await ctx.plugin(TypertRegistry)
   const api = new FakeApiClient()
-  const bench: Bench = { ctx, sinks: undefined, dispatched: [] }
+  const bench: Bench = { ctx, api, sinks: undefined, dispatched: [] }
   // Stands in for api-gateway's Remote service: this spec owns the carrier's
   // handoff, not the fan-out behind it.
   ctx.reflect.provide('remote', {
@@ -62,6 +63,10 @@ async function mount(): Promise<Bench> {
     api,
     isLoopback: true,
     hostDescription: {
+      getSnapshot: () => undefined,
+      subscribe: () => () => {},
+    },
+    connectionState: {
       getSnapshot: () => undefined,
       subscribe: () => () => {},
     },
@@ -131,5 +136,85 @@ describe('wire event bridge', () => {
     bench.sinks?.onConnected?.(description)
     bench.sinks?.onConnected?.(description) // second generation after a reconnect
     expect(resets).toBe(2)
+  })
+
+  it('keeps a replayed approval answerable when it arrives before reconnect readiness', async () => {
+    const bench = await mount()
+    const sessionId = 's-reconnect' as never
+    const approvalId = 'a-reconnect' as never
+    const description = {
+      version: '0', cwd: '/f', attachedSessions: 1, canOpenPath: true,
+    }
+    bench.sinks?.onGenerationStart?.(1)
+    bench.sinks?.onConnected?.(description)
+    await vi.waitFor(() => {
+      expect(bench.api.callsOf('session.list')).toHaveLength(1)
+    })
+    bench.sinks?.onHostEnvelope?.({
+      rpcId: 'host-added' as never,
+      payload: { type: 'host/session-added', sessionId, blank: false },
+    })
+    await Promise.resolve()
+
+    const sessions = bench.ctx.sessions as RuntimeClient.SessionRuntime
+    sessions.open(sessionId)
+    await vi.waitFor(() => {
+      expect(bench.api.callsOf('session.history')).toHaveLength(1)
+    })
+    const session = sessions.binding(sessionId)?.session
+    if (session === undefined) throw new Error('session binding was not materialized')
+
+    const requested = {
+      type: 'approval/requested' as const,
+      sessionId,
+      approvalId,
+      toolName: 'write',
+    }
+    bench.sinks?.onMuxEnvelope?.({ rpcId: 'old-generation' as never, payload: requested })
+    const stale = session.getSnapshot().pending[0]
+    if (stale === undefined) throw new Error('initial interaction was not materialized')
+
+    bench.sinks?.onStateChange?.('reconnecting')
+    expect(session.getSnapshot().pending).toHaveLength(1)
+    await expect(stale.respond({
+      ok: true,
+      value: { sessionId, approvalId, outcome: 'allowed-once' },
+    })).rejects.toThrow('pending interaction is unavailable on this connection generation')
+    expect(bench.api.callsOf('respond')).toEqual([])
+
+    bench.sinks?.onGenerationStart?.(2)
+    bench.sinks?.onMuxEnvelope?.({ rpcId: 'old-generation' as never, payload: requested })
+    const replayed = session.getSnapshot().pending[0]
+    if (replayed === undefined) throw new Error('replayed interaction was not materialized')
+    expect(replayed).not.toBe(stale)
+    expect(replayed.key).toBe('a:old-generation')
+    await expect(replayed.respond({
+      ok: true,
+      value: { sessionId, approvalId, outcome: 'allowed-once' },
+    })).rejects.toThrow('pending interaction is unavailable on this connection generation')
+
+    bench.sinks?.onConnected?.(description)
+    await vi.waitFor(() => {
+      expect(bench.api.callsOf('session.history')).toHaveLength(2)
+    })
+    expect(session.getSnapshot().pending[0]).toBe(replayed)
+
+    await replayed.respond({
+      ok: true,
+      value: { sessionId, approvalId, outcome: 'allowed-once' },
+    })
+    expect(bench.api.callsOf('respond')).toMatchObject([{
+      rpcId: 'old-generation',
+      result: {
+        ok: true,
+        value: { sessionId, approvalId, outcome: 'allowed-once' },
+      },
+    }])
+    bench.sinks?.onMuxEnvelope?.({
+      rpcId: 'resolved' as never,
+      payload: { type: 'approval/resolved', sessionId, approvalId, outcome: 'approved' as never },
+    })
+    expect(session.getSnapshot().pending).toEqual([])
+    expect(sessions.list.getSnapshot().byId[sessionId]?.pendingInteraction).toBeUndefined()
   })
 })

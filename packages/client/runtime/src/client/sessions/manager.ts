@@ -113,7 +113,14 @@ export class SessionManager {
    *  Manager-owned rather than read off Session instances because the sidebar must light up for
    *  sessions never instantiated. Cleared per connection generation — the reopen replay re-adds
    *  still-pending requests — and on session-removed. */
-  private readonly pendingInteractions = new Map<SessionId, Map<string, PendingInteractionStatus>>()
+  private readonly pendingInteractions = new Map<SessionId, Map<string, {
+    generation: number
+    status: PendingInteractionStatus
+  }>>()
+  /** Latest physical connection attempt; zero is the direct-manager/test lifecycle. */
+  private connectionGeneration = 0
+  /** Ready generation, or null while disconnected/connecting. */
+  private connectedGeneration: number | null = 0
   /**
    * Sessions that finished running while not selected — the sidebar's green
    * "done" reminder (manager-owned, survives connection generations; cleared
@@ -308,6 +315,8 @@ export class SessionManager {
   private createSession(sessionId: SessionId): Session {
     const address = this.addresses.get(sessionId)
     return new Session(sessionId, this.api, this.remote, {
+      connectionGeneration: this.connectionGeneration,
+      connectionReady: this.connectedGeneration === this.connectionGeneration,
       ...(address === undefined ? {} : {
         address,
         parentAvailable: this.catalogs.get(address.parentSessionId)?.parentAvailable ?? false,
@@ -659,8 +668,9 @@ export class SessionManager {
       interactions = new Map()
       this.pendingInteractions.set(sessionId, interactions)
     }
-    if (interactions.get(key) === status) return
-    interactions.set(key, status)
+    const current = interactions.get(key)
+    if (current?.status === status && current.generation === this.connectionGeneration) return
+    interactions.set(key, { generation: this.connectionGeneration, status })
     this.notifier.markDirty()
   }
 
@@ -884,11 +894,14 @@ export class SessionManager {
    * survive into the next generation — mux-open replay re-adds every still-pending
    * request with its live rpcId.
   */
-  handleDisconnected(): void {
-    if (this.pendingInteractions.size > 0) {
-      this.pendingInteractions.clear()
-      this.notifier.markDirty()
-    }
+  /**
+   * Fence resident and buffered session state before the new streams can dispatch frames.
+   * @param generation - physical connection generation beginning before stream delivery.
+   */
+  handleGenerationStart(generation: number): void {
+    this.connectionGeneration = generation
+    this.connectedGeneration = null
+    for (const session of this.sessions.values()) session.handleGenerationStart(generation)
     for (const [sessionId, buffer] of [...this.pendingBuffers]) {
       const kept = buffer.filter(item =>
         item.payload.type !== 'approval/requested' && item.payload.type !== 'question/requested')
@@ -898,14 +911,42 @@ export class SessionManager {
     }
   }
 
-  /** After each connection generation: refresh the session baseline and rebuild opened windows. */
-  handleConnected(): void {
+  /** Preserve visible interaction truth while making all response carriers unavailable. */
+  handleDisconnected(): void {
+    this.connectedGeneration = null
+    for (const session of this.sessions.values()) session.handleDisconnected()
+    for (const [sessionId, buffer] of [...this.pendingBuffers]) {
+      const kept = buffer.filter(item =>
+        item.payload.type !== 'approval/requested' && item.payload.type !== 'question/requested')
+      if (kept.length === buffer.length) continue
+      if (kept.length === 0) this.pendingBuffers.delete(sessionId)
+      else this.pendingBuffers.set(sessionId, kept)
+    }
+  }
+
+  /**
+   * After each connection generation: refresh the session baseline and rebuild opened windows.
+   * @param generation - ready physical connection generation; defaults to the current attempt.
+   */
+  handleConnected(generation = this.connectionGeneration): void {
+    if (generation !== this.connectionGeneration) return
+    this.connectedGeneration = generation
+    let pendingChanged = false
+    for (const [sessionId, interactions] of this.pendingInteractions) {
+      for (const [key, interaction] of interactions) {
+        if (interaction.generation === generation) continue
+        interactions.delete(key)
+        pendingChanged = true
+      }
+      if (interactions.size === 0) this.pendingInteractions.delete(sessionId)
+    }
+    if (pendingChanged) this.notifier.markDirty()
     void this.refreshList()
     const selectedAddress = this.selected === undefined ? undefined : this.addresses.get(this.selected)
     if (selectedAddress !== undefined) void this.refreshSubagents(selectedAddress.parentSessionId)
     if (this.selected !== undefined) void this.refreshSubagents(this.selected)
     for (const parentSessionId of this.openCatalogs) void this.refreshSubagents(parentSessionId)
-    for (const session of this.sessions.values()) void session.resync()
+    for (const session of this.sessions.values()) session.handleConnected(generation)
   }
 
   /** Debounce membership refetches while one parent catalog is selected or open. */
@@ -1032,7 +1073,7 @@ export class SessionManager {
     })
     const pendingInteractions = new Map<SessionId, PendingInteractionStatus>()
     for (const [sessionId, interactions] of this.pendingInteractions) {
-      const statuses = [...interactions.values()]
+      const statuses = [...interactions.values()].map(interaction => interaction.status)
       // The composer selects the first question ahead of approval. Mirror that
       // answer order so the sidebar names the interaction the user can act on.
       const status = statuses.find(candidate => candidate !== 'approval') ?? statuses[0]

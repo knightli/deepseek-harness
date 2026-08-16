@@ -997,18 +997,20 @@ describe('pending-interaction list status', () => {
     expect(manager.getListSnapshot().items).toHaveLength(0)
   })
 
-  it('drops stale status at generation death before replay re-adds live interactions', () => {
+  it('retains visible status until a ready generation reconciles replayed interactions', () => {
     const manager = new SessionManager(new FakeApiClient(), fakeRemote())
     manager.handleHostEnvelope({ rpcId: 'h1' as never, payload: { type: 'host/session-added', sessionId: S1, blank: false } })
     manager.handleMuxEnvelope({ rpcId: 'ra' as never, payload: { type: 'approval/requested', sessionId: S1, approvalId: 'ap1' as never, toolName: 'rm' } })
     expect(manager.getListSnapshot().items[0]?.pendingInteraction).toBe('approval')
-    // Generation death clears (resolved-while-disconnected questions send no frame)…
+    // Generation death preserves the visible Host-owned wait while its response
+    // carrier is unavailable.
     manager.handleDisconnected()
-    expect(manager.getListSnapshot().items[0]?.pendingInteraction).toBeUndefined()
-    // …and a replayed frame arriving before onConnected (stream open precedes
-    // the readiness handshake) survives the later handleConnected untouched.
+    expect(manager.getListSnapshot().items[0]?.pendingInteraction).toBe('approval')
+    // A replayed frame can arrive before onConnected because stream open
+    // precedes the readiness handshake. Ready reconciliation retains it.
+    manager.handleGenerationStart(1)
     manager.handleMuxEnvelope({ rpcId: 'ra' as never, payload: { type: 'approval/requested', sessionId: S1, approvalId: 'ap1' as never, toolName: 'rm' } })
-    manager.handleConnected()
+    manager.handleConnected(1)
     expect(manager.getListSnapshot().items[0]?.pendingInteraction).toBe('approval')
   })
 
