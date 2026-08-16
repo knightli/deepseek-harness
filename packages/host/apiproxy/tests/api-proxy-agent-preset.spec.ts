@@ -112,6 +112,7 @@ async function harness(
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(UserQuestionService)
   ctx.provide('sessionPersistence', (persistence ?? { list: () => Promise.resolve([]) }) as never)
+  ctx.provide('workspaceRegistry', { list: () => [], archivedSessionIds: [] } as never)
   if (presets !== undefined) ctx.provide('agentPresets', roster(presets, options.userIds) as never)
 
   const factory: AgentFactory = {
@@ -231,11 +232,25 @@ describe('session.create with an agent preset', () => {
   it('rejects a named preset without creating a session when no roster is composed', async () => {
     const { api } = await harness()
     const before = await api.sessions.list(request({}))
+    const controller = new AbortController()
+    const frames: HostFrame[] = []
+    const pump = (async () => {
+      for await (const envelope of api.events.host(request({}), controller.signal)) frames.push(envelope.payload)
+    })()
+    // Enter the async iterator before admission so its Host listeners observe
+    // any publish-then-rollback implementation, not only the final list state.
+    await Promise.resolve()
 
-    const response = await api.sessions.create(request({
-      sessionId: SessionId('unsupported-preset'),
-      agentPreset: 'standard',
-    }))
+    let response
+    try {
+      response = await api.sessions.create(request({
+        sessionId: SessionId('unsupported-preset'),
+        agentPreset: 'standard',
+      }))
+    } finally {
+      controller.abort()
+      await pump
+    }
 
     expect(response.result).toEqual({
       ok: false,
@@ -247,6 +262,75 @@ describe('session.create with an agent preset', () => {
     })
     const after = await api.sessions.list(request({}))
     expect(after.result).toEqual(before.result)
+    expect(frames).toEqual([])
+  })
+
+  it('keeps no-roster refusal out of the shared Session-id creation result', async () => {
+    const { api, ctx } = await harness()
+    const sessionId = SessionId('concurrent-no-roster')
+
+    const [named, unnamed] = await Promise.all([
+      api.sessions.create(request({ sessionId, agentPreset: 'unsupported' })),
+      api.sessions.create(request({ sessionId })),
+    ])
+
+    expect(named.result).toEqual({
+      ok: false,
+      error: {
+        code: 'agent-preset-not-found',
+        message: 'this deployment composes no agent presets',
+        details: { agentPreset: 'unsupported', available: [] },
+      },
+    })
+    expect(unnamed.result).toMatchObject({ ok: true, value: { sessionId } })
+    expect(ctx.sessions.list().map(session => session.id)).toEqual([sessionId])
+  })
+
+  it('retries an omitted-preset waiter when an admitted identity disappears before creation', async () => {
+    const sessionId = SessionId('vanishing-no-roster')
+    let listCalls = 0
+    let markEnsureRead!: () => void
+    let releaseEnsureRead!: () => void
+    const ensureReadStarted = new Promise<void>((resolve) => { markEnsureRead = resolve })
+    const ensureReadRelease = new Promise<void>((resolve) => { releaseEnsureRead = resolve })
+    const persistence = {
+      list: async () => {
+        listCalls++
+        if (listCalls === 1) return [{ id: sessionId }]
+        if (listCalls === 2) {
+          markEnsureRead()
+          await ensureReadRelease
+        }
+        return []
+      },
+      inspect: () => Promise.reject(new Error('the identity vanished before inspect')),
+    }
+    const { api, ctx } = await harness(undefined, persistence)
+
+    const namedPromise = api.sessions.create(request({ sessionId, agentPreset: 'unsupported' }))
+    await ensureReadStarted
+    const unnamedPromise = api.sessions.create(request({ sessionId }))
+    releaseEnsureRead()
+    const [named, unnamed] = await Promise.all([namedPromise, unnamedPromise])
+
+    expect(named.result).toMatchObject({
+      ok: false,
+      error: { code: 'agent-preset-not-found', details: { agentPreset: 'unsupported' } },
+    })
+    expect(unnamed.result).toMatchObject({ ok: true, value: { sessionId } })
+    expect(ctx.sessions.list().map(session => session.id)).toEqual([sessionId])
+    expect(listCalls).toBe(3)
+  })
+
+  it('adopts an existing recorded composition after its roster is removed', async () => {
+    const { api, ctx, cwd } = await harness()
+    const sessionId = SessionId('recorded-without-roster')
+    const session = ctx.sessions.create(sessionId, { meta: { cwd, agentPreset: 'retired' } })
+    ctx.agents.register(stubAgent(session))
+
+    const response = await api.sessions.create(request({ sessionId, agentPreset: 'retired' }))
+
+    expect(response.result).toMatchObject({ ok: true, value: { sessionId, agentPreset: 'retired' } })
   })
 
   it('says why a preset-less session cannot be adopted under one', async () => {
@@ -398,10 +482,8 @@ describe('agentPreset.select', () => {
   it('forwards the owner event so clients can drop that session\'s catalogs', async () => {
     const { api, ctx } = await harness(['standard', 'minimal'])
     await api.sessions.create(request({ sessionId: SessionId('sel-frame'), agentPreset: 'standard' }))
-    // The host-stream opener reads the committed-workspace baseline; this
-    // spec owns preset identity, so the stub suffices (api-proxy-commands
-    // precedent).
-    ctx.provide('workspaceRegistry', { list: () => [] } as never)
+    // The harness's empty workspace registry satisfies the host-stream
+    // baseline; this spec owns preset identity, not workspace behavior.
     const abort = new AbortController()
     const frames: HostFrame[] = []
     const stream = api.events.host(request({}), abort.signal)

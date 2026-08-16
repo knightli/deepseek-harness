@@ -1007,12 +1007,8 @@ function noRoster(agentPreset: string): RpcError {
   }
 }
 
-/** A fresh session named a preset in a deployment that composes no roster. */
-class AgentPresetRosterUnavailable extends Error {
-  constructor(readonly agentPreset: string) {
-    super('this deployment composes no agent presets')
-  }
-}
+/** A fresh create reached the publication boundary after no-roster admission. */
+class AgentPresetRosterUnavailable extends Error {}
 
 /** Map one authoring/roster failure onto its wire code. */
 function presetError(agentPreset: string, error: unknown): RpcError {
@@ -1225,12 +1221,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
    * setup, where a failure rolls the whole creation back rather than leaving a
    * published session whose capabilities are half-installed.
    *
-   * A deployment with no preset roster composes nothing when the caller names
-   * no preset, so those sessions share the host composition. An explicit id in
-   * that deployment fails before the Agent and Session are published.
+   * A deployment with no preset roster composes nothing, so those sessions
+   * share the host composition. Fresh `session.create` admission rejects an
+   * explicit preset before reaching this shared creation/resume helper; a
+   * recorded preset may still arrive here while resuming or forking history
+   * after a roster was removed, and must preserve the pre-existing no-roster
+   * composition semantics.
    * @param presetId - the requested preset, or `undefined` for the default.
    * @returns the id to record on the header (absent without a roster) and the setup callback.
-   * @throws when an explicit preset cannot be resolved, including when the deployment composes no roster.
+   * @throws when the composed roster cannot resolve the requested preset.
    */
   async function composeAgent(presetId: string | undefined): Promise<{
     agentPreset?: string
@@ -1238,7 +1237,6 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   }> {
     const presets = ctx.get('agentPresets')
     if (presets === undefined) {
-      if (presetId !== undefined) throw new AgentPresetRosterUnavailable(presetId)
       return {
         setup: (agentCtx: Context) => {
           installSelection(agentCtx)
@@ -1254,6 +1252,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         await presets.mount(agentCtx, resolvedId)
       },
     }
+  }
+
+  /**
+   * Whether a caller-selected identity already belongs to a live or persisted
+   * Session.
+   *
+   * No-roster preset refusal is request-local admission, not part of the
+   * Session-ID creation single-flight. Existing identities must still reach
+   * `ensureSession` so its ownership, cwd, and immutable-composition checks
+   * keep their established precedence. A fresh identity can be refused before
+   * `ctx.agents.create()` publishes any Session or Host stream frame.
+   */
+  async function sessionIdentityExists(sessionId: SessionId, checkPersistedIdentity: boolean): Promise<boolean> {
+    if (ctx.sessions.get(sessionId) !== undefined || ctx.agents.get(sessionId) !== undefined) return true
+    if (!checkPersistedIdentity) return false
+    const persistence = ctx.get('sessionPersistence')
+    if (persistence === undefined) return false
+    return (await persistence.list()).some(header => header.id === sessionId)
   }
 
   const hasSubagentOwner = (
@@ -1670,6 +1686,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })).agent
         }
 
+        // The request-local admission above normally rejects this case. Keep
+        // the publication boundary defensive against an existing identity
+        // disappearing between its read and this shared creation operation.
+        if (presetId !== undefined && ctx.get('agentPresets') === undefined) {
+          throw new AgentPresetRosterUnavailable('this deployment composes no agent presets')
+        }
+
         try {
           await mkdir(cwd, { recursive: true })
         } catch (error: unknown) {
@@ -1703,7 +1726,19 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       })
       sessionCreations.set(sessionId, creation)
     }
-    const agent = await creation
+    let agent: Agent
+    try {
+      agent = await creation
+    } catch (error: unknown) {
+      // A valid omitted-preset caller may have joined a request whose existing
+      // identity disappeared after no-roster admission. That request-specific
+      // refusal must not become the shared caller's result: after `finally`
+      // clears the single-flight entry, retry under the omitted composition.
+      if (error instanceof AgentPresetRosterUnavailable && presetId === undefined) {
+        return ensureSession(sessionId, cwd, checkPersistedIdentity)
+      }
+      throw error
+    }
     if (hasSubagentOwner(agent.session, agent)) throw new SubagentSessionOwnership(sessionId)
     // Beside the cwd check for the same reason, and after the await so it
     // covers every path that yields a live agent — freshly created, adopted
@@ -2205,10 +2240,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const cwd = workspace?.path ?? request.payload.cwd ?? defaults.cwd
         const requestedPreset = request.payload.agentPreset
         try {
+          if (
+            requestedPreset !== undefined
+            && ctx.get('agentPresets') === undefined
+            && !await sessionIdentityExists(sessionId, request.payload.sessionId !== undefined)
+          ) {
+            return err(request, noRoster(requestedPreset))
+          }
           await ensureSession(sessionId, cwd, request.payload.sessionId !== undefined, requestedPreset)
         } catch (error: unknown) {
-          if (error instanceof AgentPresetRosterUnavailable) {
-            return err(request, noRoster(error.agentPreset))
+          if (error instanceof AgentPresetRosterUnavailable && requestedPreset !== undefined) {
+            return err(request, noRoster(requestedPreset))
           }
           if (error instanceof AgentPresetConflict) {
             return err(request, {

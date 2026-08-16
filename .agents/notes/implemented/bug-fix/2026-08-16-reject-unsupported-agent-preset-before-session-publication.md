@@ -10,20 +10,20 @@ A deployment without an agent-preset roster uses the Host composition when `sess
 
 ## Decision
 
-The Host composition resolver distinguishes an omitted preset from an explicit id. Without a roster, omission retains the shared Host composition, while an explicit id raises a roster-unavailable failure before Agent creation. `session.create` maps that failure through the existing `noRoster()` response to stable `agent-preset-not-found` details.
+`session.create` performs request-local admission before entering the Session-id creation single-flight. Without a roster, omission retains the shared Host composition; a fresh identity with an explicit id returns the existing `noRoster()` response and its stable `agent-preset-not-found` details before Agent creation. Live and persisted identities continue into the ordinary ownership, cwd, and immutable-composition checks.
 
-Existing Session adoption remains separate. Its recorded composition is checked before a resolver is needed, so naming a preset on a preset-less existing Session continues to return `agent-preset-conflict` rather than changing that Session's identity.
+The shared composition resolver keeps its no-roster behavior even when a recorded preset reaches it. This preserves cold resume and fork after a roster is removed, while naming a preset on a preset-less existing Session continues to return `agent-preset-conflict`. The fresh-publication boundary repeats the no-roster check in case an existing identity disappears after admission; an omitted-preset waiter that joined that request-specific failure retries after the single-flight clears, so it can create the identity without inheriting another caller's unsupported preset.
 
 ## Verification
 
-The API-proxy preset suite creates through the public Host API, compares `session.list` before and after the refusal, and pins the complete typed error. The neighboring adoption tests continue to pin the distinct conflict behavior for an existing Session.
+The API-proxy preset suite compares `session.list` before and after the refusal, observes the public Host stream to prove that no publish-and-rollback frames escaped, pins the complete typed error, races a named request against an omitted-preset request for one Session id, and repeats that race while the admitted identity disappears before creation. A keyless real-Loader test mounts the Session registry, Agent registry, runtime fixture, and ApiProxyService, then drives the fetch/SSE carrier and proves zero factory calls, Sessions, and Host frames. The neighboring adoption tests continue to pin the distinct behavior for an existing Session.
 
 ## Alternatives considered
 
-**Reject every explicit preset at the `session.create` handler when no roster exists.** That check cannot distinguish a fresh creation from adopting an existing preset-less Session without duplicating the resolver's identity work, and it would replace the established conflict response for the latter.
+**Raise a roster-unavailable exception from the shared composition resolver.** Fresh creation, cold resume, and fork all use that resolver, while concurrent callers share one creation Promise per Session id. A request-specific failure there both breaks recorded-history paths after roster removal and lets one caller's preset contaminate another caller's result.
 
 **Create the Session and roll it back after detecting the missing roster.** Publication is observable through the Session registry and Host notifications. Rollback cannot make the unsupported request free of transient side effects.
 
 ## Consequences
 
-An unsupported explicit preset cannot add a Session row or Agent, and callers receive one stable roster error. The default no-roster deployment behavior and existing-session identity checks remain unchanged. The resolver gains one internal failure type so the RPC handler can preserve the existing wire error vocabulary.
+An unsupported explicit preset cannot add a Session row or Agent, and callers receive one stable roster error. The default no-roster deployment behavior, existing-session identity checks, cold resume, fork, and caller-neutral Session-id single-flight remain unchanged. Admission performs one persistence-list read only for an explicit-id, no-roster request whose identity is not already live.
