@@ -228,6 +228,27 @@ describe('session.create with an agent preset', () => {
     expect(ctx.sessions.get(SessionId('s6'))?.header.agentPreset).toBeUndefined()
   })
 
+  it('rejects a named preset without creating a session when no roster is composed', async () => {
+    const { api } = await harness()
+    const before = await api.sessions.list(request({}))
+
+    const response = await api.sessions.create(request({
+      sessionId: SessionId('unsupported-preset'),
+      agentPreset: 'standard',
+    }))
+
+    expect(response.result).toEqual({
+      ok: false,
+      error: {
+        code: 'agent-preset-not-found',
+        message: 'this deployment composes no agent presets',
+        details: { agentPreset: 'standard', available: [] },
+      },
+    })
+    const after = await api.sessions.list(request({}))
+    expect(after.result).toEqual(before.result)
+  })
+
   it('says why a preset-less session cannot be adopted under one', async () => {
     // Two callers reach this: a deployment that composes no roster, and a
     // session created before one existed. Both record no preset, so naming

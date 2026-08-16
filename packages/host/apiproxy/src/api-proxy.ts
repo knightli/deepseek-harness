@@ -1007,6 +1007,13 @@ function noRoster(agentPreset: string): RpcError {
   }
 }
 
+/** A fresh session named a preset in a deployment that composes no roster. */
+class AgentPresetRosterUnavailable extends Error {
+  constructor(readonly agentPreset: string) {
+    super('this deployment composes no agent presets')
+  }
+}
+
 /** Map one authoring/roster failure onto its wire code. */
 function presetError(agentPreset: string, error: unknown): RpcError {
   if (error instanceof UnknownPresetError) {
@@ -1218,11 +1225,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
    * setup, where a failure rolls the whole creation back rather than leaving a
    * published session whose capabilities are half-installed.
    *
-   * A deployment with no preset roster composes nothing and every session
-   * shares the host composition, which is the behavior before presets existed.
+   * A deployment with no preset roster composes nothing when the caller names
+   * no preset, so those sessions share the host composition. An explicit id in
+   * that deployment fails before the Agent and Session are published.
    * @param presetId - the requested preset, or `undefined` for the default.
    * @returns the id to record on the header (absent without a roster) and the setup callback.
-   * @throws when the roster supplies no such preset.
+   * @throws when an explicit preset cannot be resolved, including when the deployment composes no roster.
    */
   async function composeAgent(presetId: string | undefined): Promise<{
     agentPreset?: string
@@ -1230,6 +1238,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   }> {
     const presets = ctx.get('agentPresets')
     if (presets === undefined) {
+      if (presetId !== undefined) throw new AgentPresetRosterUnavailable(presetId)
       return {
         setup: (agentCtx: Context) => {
           installSelection(agentCtx)
@@ -2198,6 +2207,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           await ensureSession(sessionId, cwd, request.payload.sessionId !== undefined, requestedPreset)
         } catch (error: unknown) {
+          if (error instanceof AgentPresetRosterUnavailable) {
+            return err(request, noRoster(error.agentPreset))
+          }
           if (error instanceof AgentPresetConflict) {
             return err(request, {
               code: 'agent-preset-conflict',
