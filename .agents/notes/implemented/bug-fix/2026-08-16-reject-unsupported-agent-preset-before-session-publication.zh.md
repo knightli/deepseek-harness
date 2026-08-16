@@ -12,7 +12,7 @@ Status: implemented
 
 `session.create` 会在进入按 Session id 共用的创建 single-flight 前执行请求本地 admission。没有名单时，省略仍使用共享 Host 组装；全新 identity 显式指定 id 时，会在创建 Agent 前返回既有 `noRoster()` 响应及字段稳定的 `agent-preset-not-found`。live 与 persisted identity 则继续进入既有的 ownership、cwd 与不可变 composition 检查。
 
-即使已记录的 preset 抵达共享 composition 解析器，该解析器仍保留无名单时的既有行为。因此，移除名单后的冷恢复与 fork 不受影响，而在已有的无 preset Session 上指定 preset 仍返回 `agent-preset-conflict`。全新发布边界会在防御性无名单检查旁捕获同一个确切 roster，并且发生在创建项目目录的挂起点之前，因此 roster 卸载不会把已按具名 composition 放行的请求变成已发布的 Host composition Session。若等待方加入了另一个调用方专属的 roster 或 persisted-preset 失败，且自身请求不同，它会在 single-flight 清除后重试，使省略 preset 的接管与每一项具名冲突都保持调用方本地语义。
+即使已记录的 preset 抵达共享 composition 解析器，该解析器仍保留无名单时的既有行为。因此，移除名单后的冷恢复与 fork 不受影响，而在已有的无 preset Session 上指定 preset 仍返回 `agent-preset-conflict`。全新发布边界会在防御性无名单检查旁捕获同一个确切 roster，并且发生在创建项目目录的挂起点之前，因此 roster 卸载不会把已按具名 composition 放行的请求变成已发布的 Host composition Session。若等待方加入了另一个调用方专属的 roster、cwd 或 persisted-preset 失败，且自身请求不同，它会在 single-flight 清除后重试，使省略 preset 的接管与每一项具名冲突都保持调用方本地语义。
 
 ## Verification
 

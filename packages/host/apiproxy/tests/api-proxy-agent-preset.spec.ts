@@ -403,6 +403,50 @@ describe('session.create with an agent preset', () => {
     expect(unnamed.result).toMatchObject({ ok: true, value: { sessionId } })
   })
 
+  it('keeps a persisted cwd conflict local to the caller that names it', async () => {
+    const sessionId = SessionId('persisted-cwd-race')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-persisted-cwd-')))
+    const meta = { version: 0 as const, id: sessionId, createdAt: 1, cwd }
+    const events: Session['events'] = []
+    let inspectStarted!: () => void
+    let releaseInspect!: () => void
+    const started = new Promise<void>((resolve) => { inspectStarted = resolve })
+    const release = new Promise<void>((resolve) => { releaseInspect = resolve })
+    const persistence = {
+      list: () => Promise.resolve([meta]),
+      inspect: async () => {
+        inspectStarted()
+        await release
+        return { meta, events }
+      },
+    }
+    const { api } = await harness(undefined, persistence, {
+      defaults: { cwd },
+      resumeStored: { meta, events },
+    })
+    const wrongCwd = join(cwd, 'wrong')
+
+    const wrongPromise = api.sessions.create(request({
+      sessionId,
+      cwd: wrongCwd,
+      agentPreset: 'unsupported',
+    }))
+    await started
+    const correctPromise = api.sessions.create(request({ sessionId }))
+    await Promise.resolve()
+    releaseInspect()
+    const [wrong, correct] = await Promise.all([wrongPromise, correctPromise])
+
+    expect(wrong.result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'session-conflict',
+        details: { sessionId, requestedCwd: wrongCwd, existingCwd: cwd },
+      },
+    })
+    expect(correct.result).toMatchObject({ ok: true, value: { sessionId } })
+  })
+
   it('adopts an existing recorded composition after its roster is removed', async () => {
     const { api, ctx, cwd } = await harness()
     const sessionId = SessionId('recorded-without-roster')

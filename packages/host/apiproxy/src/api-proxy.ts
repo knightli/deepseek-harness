@@ -1751,6 +1751,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       ) {
         return ensureSession(sessionId, cwd, checkPersistedIdentity, presetId)
       }
+      if (error instanceof SessionCwdConflict && cwd !== error.requestedCwd) {
+        return ensureSession(sessionId, cwd, checkPersistedIdentity, presetId)
+      }
       throw error
     }
     if (hasSubagentOwner(agent.session, agent)) throw new SubagentSessionOwnership(sessionId)
