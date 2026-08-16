@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-16-reject-unsupported-agent-preset-before-session-publication.md
-2026-08-16-reject-unsupported-agent-preset-before-session-publication.md: 8f3fdd2ca587a6d3aa419944d4048258a171e5db
-2026-08-16-reject-unsupported-agent-preset-before-session-publication.zh.md: 8254855f5f302cba044c9057eb191133cb85df28
+2026-08-16-reject-unsupported-agent-preset-before-session-publication.md: 6ec4a8f9504754b898c40c584e1eec0a6e4bb267
+2026-08-16-reject-unsupported-agent-preset-before-session-publication.zh.md: 801f1b5a0f97baf2e489c27906586a5b5db48fa3

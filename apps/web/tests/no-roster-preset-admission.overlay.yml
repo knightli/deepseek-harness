@@ -1,0 +1,4 @@
+# Runnable shipped-Web profile with only the optional preset roster removed.
+# The Host and stock AgentFactory remain the real product composition.
+- id: agent-presets
+  disabled: true

@@ -26,6 +26,7 @@
     "tests/fixtures/external-text-agent-contract.ts",
     "tests/fixtures/external-text-agent.ts",
     "tests/external-text-agent.e2e.ts",
+    "tests/no-roster-preset-admission.e2e.ts",
     "tests/scaffold-hermetic.e2e.ts",
     "tests/minimal-preset.snapshot.ts",
     "tests/message-feedback-protocol.snapshot.ts",

@@ -1,0 +1,15 @@
+{
+  "beforeSessionIds": [],
+  "refused": {
+    "ok": false,
+    "error": {
+      "code": "agent-preset-not-found",
+      "message": "this deployment composes no agent presets",
+      "details": {
+        "agentPreset": "unsupported",
+        "available": []
+      }
+    }
+  },
+  "afterSessionIds": []
+}

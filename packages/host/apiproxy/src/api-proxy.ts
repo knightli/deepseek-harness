@@ -33,7 +33,7 @@ import {
   PresetNotWritableError, resolveSessionPreset,
   SETTINGS_NAMESPACE as AGENT_PRESET_SETTINGS_NAMESPACE, UnknownPresetError,
 } from '@deepseek-ai/dsh-agent-presets'
-import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresets, PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
   ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
@@ -1231,11 +1231,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
    * @returns the id to record on the header (absent without a roster) and the setup callback.
    * @throws when the composed roster cannot resolve the requested preset.
    */
-  async function composeAgent(presetId: string | undefined): Promise<{
+  async function composeAgent(
+    presetId: string | undefined,
+    presets: AgentPresets | undefined = ctx.get('agentPresets'),
+  ): Promise<{
     agentPreset?: string
     setup: (agentCtx: Context) => Promise<void>
   }> {
-    const presets = ctx.get('agentPresets')
     if (presets === undefined) {
       return {
         setup: (agentCtx: Context) => {
@@ -1689,16 +1691,21 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         // The request-local admission above normally rejects this case. Keep
         // the publication boundary defensive against an existing identity
         // disappearing between its read and this shared creation operation.
-        if (presetId !== undefined && ctx.get('agentPresets') === undefined) {
+        const presets = ctx.get('agentPresets')
+        if (presetId !== undefined && presets === undefined) {
           throw new AgentPresetRosterUnavailable('this deployment composes no agent presets')
         }
+        // Capture the exact roster outcome beside the publication decision.
+        // Filesystem work may suspend and the roster's owning fiber may unload
+        // while it runs; composition must not silently fall back to the Host
+        // setup after this request was admitted under a real roster.
+        const composition = await composeAgent(presetId, presets)
 
         try {
           await mkdir(cwd, { recursive: true })
         } catch (error: unknown) {
           throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
         }
-        const composition = await composeAgent(presetId)
         return (await ctx.agents.create({
           sessionId,
           agentOptions: agentOptions(),
@@ -1730,12 +1737,19 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     try {
       agent = await creation
     } catch (error: unknown) {
-      // A valid omitted-preset caller may have joined a request whose existing
-      // identity disappeared after no-roster admission. That request-specific
-      // refusal must not become the shared caller's result: after `finally`
-      // clears the single-flight entry, retry under the omitted composition.
+      // A caller may have joined a request whose request-specific admission
+      // failed inside the shared persisted-identity operation. After `finally`
+      // clears the single-flight entry, retry when this caller did not make the
+      // same request: omitted adoption remains ordinary, and a differently
+      // named caller receives conflict details for its own preset.
       if (error instanceof AgentPresetRosterUnavailable && presetId === undefined) {
         return ensureSession(sessionId, cwd, checkPersistedIdentity)
+      }
+      if (
+        error instanceof AgentPresetConflict
+        && (presetId === undefined || presetId !== error.requestedPreset)
+      ) {
+        return ensureSession(sessionId, cwd, checkPersistedIdentity, presetId)
       }
       throw error
     }

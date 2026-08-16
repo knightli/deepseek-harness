@@ -12,11 +12,11 @@ Status: implemented
 
 `session.create` 会在进入按 Session id 共用的创建 single-flight 前执行请求本地 admission。没有名单时，省略仍使用共享 Host 组装；全新 identity 显式指定 id 时，会在创建 Agent 前返回既有 `noRoster()` 响应及字段稳定的 `agent-preset-not-found`。live 与 persisted identity 则继续进入既有的 ownership、cwd 与不可变 composition 检查。
 
-即使已记录的 preset 抵达共享 composition 解析器，该解析器仍保留无名单时的既有行为。因此，移除名单后的冷恢复与 fork 不受影响，而在已有的无 preset Session 上指定 preset 仍返回 `agent-preset-conflict`。全新发布边界会再次执行无名单检查，以防已有 identity 在 admission 后消失；若省略 preset 的等待方加入了这项请求专属失败，它会在 single-flight 清除后重试，因此仍可创建 identity，且不会继承另一个调用方的不支持 preset。
+即使已记录的 preset 抵达共享 composition 解析器，该解析器仍保留无名单时的既有行为。因此，移除名单后的冷恢复与 fork 不受影响，而在已有的无 preset Session 上指定 preset 仍返回 `agent-preset-conflict`。全新发布边界会在防御性无名单检查旁捕获同一个确切 roster，并且发生在创建项目目录的挂起点之前，因此 roster 卸载不会把已按具名 composition 放行的请求变成已发布的 Host composition Session。若等待方加入了另一个调用方专属的 roster 或 persisted-preset 失败，且自身请求不同，它会在 single-flight 清除后重试，使省略 preset 的接管与每一项具名冲突都保持调用方本地语义。
 
 ## Verification
 
-API proxy preset 测试套件比较拒绝前后的 `session.list`，观察公开 Host stream 以证明没有 publish-and-rollback frame 外泄，固定完整的类型化错误，让显式命名请求与省略 preset 的请求争用同一个 Session id，并在 admitted identity 于创建前消失时重复这项竞争。一项无密钥 real-Loader 测试会挂载 Session registry、Agent registry、runtime fixture 与 ApiProxyService，再通过 fetch/SSE carrier 驱动行为，并证明 factory 调用、Session 与 Host frame 均为零。相邻接管测试继续固定已有 Session 的独立行为。
+API proxy preset 测试套件比较拒绝前后的 `session.list`，观察公开 Host stream 以证明没有 publish-and-rollback frame 外泄，固定完整的类型化错误，验证 composition 在目录创建前已被捕获，让显式命名请求与省略 preset 的请求争用同一个 Session id，并针对消失 identity 与 persisted identity 重复调用方本地检查。一项无密钥 real-Loader 测试会挂载 Session registry、Agent registry、runtime fixture 与 ApiProxyService，再通过 fetch/SSE carrier 驱动行为，并证明 factory 调用、Session 与 Host frame 均为零。测试还会在只禁用可选 roster 的情况下启动已发布的 `dsh web` profile；其公开 HTTP 结果和未变化的 Session 列表固定在 `apps/web/tests/snapshots/no-roster-preset-admission/protocol.expected.json`。相邻接管测试继续固定已有 Session 的独立行为。
 
 ## Alternatives considered
 

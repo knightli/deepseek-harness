@@ -5,7 +5,7 @@
  * rebuilding it differently would replay tool calls the new agent cannot make.
  */
 
-import { mkdtempSync, realpathSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -39,7 +39,11 @@ function stubAgent(session: Session): Agent {
  * `apps/cli`. Ids listed in `userIds` present as locally authored; the rest
  * ship with the deployment.
  */
-function roster(ids: readonly string[], userIds: readonly string[] = []): unknown {
+function roster(
+  ids: readonly string[],
+  userIds: readonly string[] = [],
+  onResolve?: () => void,
+): unknown {
   const trustOf = (id: string): 'system' | 'user' => (userIds.includes(id) ? 'user' : 'system')
   const presetOf = (id: string): object =>
     ({ id, trust: trustOf(id), path: `/presets/${id}/agent.cordis.yml` })
@@ -47,6 +51,7 @@ function roster(ids: readonly string[], userIds: readonly string[] = []): unknow
     defaultId: ids[0],
     list: () => Promise.resolve(ids.map(presetOf)),
     resolve: (id?: string) => {
+      onResolve?.()
       const wanted = id ?? ids[0] ?? ''
       if (!ids.includes(wanted)) return Promise.reject(new UnknownPresetError(wanted, ids))
       return Promise.resolve(presetOf(wanted))
@@ -104,7 +109,12 @@ const services = new Map<string, Record<string, unknown>>()
 async function harness(
   presets?: readonly string[],
   persistence?: unknown,
-  options: { userIds?: readonly string[]; defaults?: Record<string, unknown> } = {},
+  options: {
+    userIds?: readonly string[]
+    defaults?: Record<string, unknown>
+    onPresetResolve?: () => void
+    resumeStored?: { meta: Session['header']; events: Session['events'] }
+  } = {},
 ) {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-preset-')))
   const ctx = new Context()
@@ -113,7 +123,9 @@ async function harness(
   await ctx.plugin(UserQuestionService)
   ctx.provide('sessionPersistence', (persistence ?? { list: () => Promise.resolve([]) }) as never)
   ctx.provide('workspaceRegistry', { list: () => [], archivedSessionIds: [] } as never)
-  if (presets !== undefined) ctx.provide('agentPresets', roster(presets, options.userIds) as never)
+  if (presets !== undefined) {
+    ctx.provide('agentPresets', roster(presets, options.userIds, options.onPresetResolve) as never)
+  }
 
   const factory: AgentFactory = {
     async createAgent(_ownerCtx, options) {
@@ -131,8 +143,19 @@ async function harness(
       const unregister = ctx.agents.register(agent)
       return { agent, dispose: () => { unregister(); return Promise.resolve() } }
     },
-    async resume() {
-      throw new Error('test harness has no persisted sessions')
+    async resume(_ownerCtx, resumeOptions) {
+      const stored = options.resumeStored
+      if (stored === undefined) throw new Error('test harness has no persisted sessions')
+      const session = ctx.sessions.create(resumeOptions.resumeSessionId, {
+        seed: stored.events,
+        meta: stored.meta,
+      })
+      const agent = stubAgent(session)
+      const agentCtx = ctx.extend({ agent })
+      ;(agent as { ctx?: Context }).ctx = agentCtx
+      await resumeOptions.setup?.(agentCtx)
+      const unregister = ctx.agents.register(agent)
+      return { agent, dispose: () => { unregister(); return Promise.resolve() } }
     },
   }
   ctx.agents.setFactory(factory)
@@ -152,6 +175,25 @@ describe('session.create with an agent preset', () => {
 
     expect(created.result.ok).toBe(true)
     expect(ctx.sessions.get(SessionId('s1'))?.header.agentPreset).toBe('minimal')
+  })
+
+  it('captures the preset composition before the project-directory suspension', async () => {
+    let projectPath = ''
+    const directoryStates: boolean[] = []
+    const { api, cwd } = await harness(['standard'], undefined, {
+      onPresetResolve: () => { directoryStates.push(existsSync(projectPath)) },
+    })
+    projectPath = join(cwd, 'not-created-yet', 'project')
+
+    const created = await api.sessions.create(request({
+      sessionId: SessionId('composition-before-mkdir'),
+      agentPreset: 'standard',
+      cwd: projectPath,
+    }))
+
+    expect(created.result.ok).toBe(true)
+    expect(directoryStates).toEqual([false])
+    expect(existsSync(projectPath)).toBe(true)
   })
 
   it('records the default when the caller names none', async () => {
@@ -320,6 +362,45 @@ describe('session.create with an agent preset', () => {
     expect(unnamed.result).toMatchObject({ ok: true, value: { sessionId } })
     expect(ctx.sessions.list().map(session => session.id)).toEqual([sessionId])
     expect(listCalls).toBe(3)
+  })
+
+  it('keeps a persisted preset conflict local to the caller that names it', async () => {
+    const sessionId = SessionId('persisted-no-roster-race')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-persisted-race-')))
+    const meta = { version: 0 as const, id: sessionId, createdAt: 1, cwd }
+    const events: Session['events'] = []
+    let inspectStarted!: () => void
+    let releaseInspect!: () => void
+    const started = new Promise<void>((resolve) => { inspectStarted = resolve })
+    const release = new Promise<void>((resolve) => { releaseInspect = resolve })
+    const persistence = {
+      list: () => Promise.resolve([meta]),
+      inspect: async () => {
+        inspectStarted()
+        await release
+        return { meta, events }
+      },
+    }
+    const { api } = await harness(undefined, persistence, {
+      defaults: { cwd },
+      resumeStored: { meta, events },
+    })
+
+    const namedPromise = api.sessions.create(request({ sessionId, agentPreset: 'unsupported' }))
+    await started
+    const unnamedPromise = api.sessions.create(request({ sessionId }))
+    await Promise.resolve()
+    releaseInspect()
+    const [named, unnamed] = await Promise.all([namedPromise, unnamedPromise])
+
+    expect(named.result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'agent-preset-conflict',
+        details: { sessionId, requestedPreset: 'unsupported' },
+      },
+    })
+    expect(unnamed.result).toMatchObject({ ok: true, value: { sessionId } })
   })
 
   it('adopts an existing recorded composition after its roster is removed', async () => {
