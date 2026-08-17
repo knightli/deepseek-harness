@@ -227,6 +227,8 @@ export class CommandRuntime extends TypertRemoteService {
     scope => new CommandLayer(scope),
     () => { this.notifyChange() },
   )
+  /** Reference count of every name registered in any global or scoped layer. */
+  private readonly knownNames = new Map<string, number>()
 
   /** Monotonic per-instance counter behind {@link mintCommandId}. */
   private commandSeq = 0
@@ -246,9 +248,31 @@ export class CommandRuntime extends TypertRemoteService {
     const registered = normalizeDefinition(definition)
     return this.layers.effect(
       this.ctx,
-      layer => layer.commands.insert(registered.definition.name, registered),
+      (layer) => {
+        const commandName = registered.definition.name
+        const remove = layer.commands.insert(commandName, registered)
+        this.knownNames.set(commandName, (this.knownNames.get(commandName) ?? 0) + 1)
+        return () => {
+          remove()
+          const remaining = (this.knownNames.get(commandName) ?? 1) - 1
+          if (remaining === 0) this.knownNames.delete(commandName)
+          else this.knownNames.set(commandName, remaining)
+        }
+      },
       { label: 'commands.register()' },
     )
+  }
+
+  /**
+   * Test whether any global or scoped layer registers one command name.
+   * This coarse read proves only a definite miss without requiring an Agent;
+   * callers still use {@link find} after Agent resolution for the effective
+   * scoped definition.
+   * @param name - command name without a slash.
+   * @returns whether at least one layer currently registers the name.
+   */
+  has(name: string): boolean {
+    return this.knownNames.has(name)
   }
 
   /**

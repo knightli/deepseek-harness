@@ -90,7 +90,7 @@ interface BenchOptions {
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
   /** Private capability lookup injected by the conversation package apply. */
-  loadSessionCapabilities?: () => Promise<{
+  loadSessionCapabilities?: (sessionId: SessionId) => Promise<{
     readonly imageInput: boolean
     readonly modelSelection: boolean
     readonly fork: boolean
@@ -270,6 +270,48 @@ describe('image draft rail', () => {
     expect(shell.snapshot.draft).toBe('keep')
     expect(shell.snapshot.imageIds).toEqual([])
   })
+
+  it.each(['false', 'deferred', 'error'] as const)(
+    'fails closed across an A to B switch when B capability lookup is %s',
+    async (mode) => {
+      const secondSession = 's2' as SessionId
+      const pending = new Promise<{ imageInput: boolean; modelSelection: boolean; fork: boolean }>(() => undefined)
+      const loadSessionCapabilities = vi.fn((sessionId: SessionId) => {
+        if (sessionId === SID) {
+          return Promise.resolve({ imageInput: true, modelSelection: true, fork: true })
+        }
+        if (mode === 'false') {
+          return Promise.resolve({ imageInput: false, modelSelection: true, fork: true })
+        }
+        if (mode === 'error') return Promise.reject(new Error('capability unavailable'))
+        return pending
+      })
+      const addImages = vi.fn(() => null)
+      const { view, props, textarea, shell } = bench({
+        draft: 'keep',
+        addImages,
+        loadSessionCapabilities,
+      })
+      await capabilitiesReady()
+
+      view.rerender(<InputBar {...props} sessionId={secondSession} />)
+      const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
+      fireEvent.paste(textarea, {
+        clipboardData: {
+          items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+          getData: () => '',
+        },
+      })
+      fireEvent.drop(document.body, {
+        dataTransfer: { types: ['Files'], files: [image], dropEffect: 'none' },
+      })
+
+      expect(view.getByRole('alert').textContent).toContain('This session does not support image input.')
+      expect(addImages).not.toHaveBeenCalled()
+      expect(shell.snapshot.draft).toBe('keep')
+      expect(shell.snapshot.imageIds).toEqual([])
+    },
+  )
 
   it('collects clipboard files while preserving text from a mixed paste', async () => {
     const addImages = vi.fn(() => null)

@@ -715,6 +715,15 @@ announce(agent: Agent): void
 get(id: SessionId): Agent | undefined
 
 /**
+ * Read the session-operation capabilities of the factory that owns a live
+ * Session, or of the active factory that would resume a cold Session. This
+ * method never creates or resumes an Agent.
+ * @param id - shared Agent/Session id whose factory behavior is queried.
+ * @returns the factory declaration, or `undefined` for the stock defaults.
+ */
+sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined
+
+/**
  * Test whether a live agent was created through one exact parent agent's
  * scoped context. Runtime ownership is independent of durable session
  * lineage and remains unambiguous when unrelated providers reuse an id.
@@ -739,7 +748,7 @@ list(): Agent[]
 roots(): Agent[]
 ```
 
-Source: [`packages/core/agent/src/index.ts:256`](../../packages/core/agent/src/index.ts)
+Source: [`packages/core/agent/src/index.ts:269`](../../packages/core/agent/src/index.ts)
 
 <a id="agent-events"></a>
 

@@ -2,7 +2,7 @@
  * CSS Modules enter client bundles through virtual modules, so the loader must
  * explicitly register the underlying stylesheet as a watch dependency.
  */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,7 @@ import {
   clientBundle,
   cssModulesInlinePlugin,
   repositoryCssModuleFilename,
+  repositoryCssModuleVirtualId,
   sortedCssModuleClassMap,
 } from '../packages/client/tsdown.client.ts'
 
@@ -111,14 +112,13 @@ describe('client bundle CSS Modules', () => {
     const secondRoot = join(tmpdir(), 'dsh-client-css-checkout-two')
     const relativePath = join('packages', 'client', 'fixture', 'src', 'Fixture.module.css')
     const otherRelativePath = join('packages', 'client', 'other', 'src', 'Fixture.module.css')
-    const plugin = cssModulesInlinePlugin('@deepseek-ai/dsh-client-test', firstRoot)
 
     expect(cssClassIdentity(firstRoot, relativePath)).toBe(cssClassIdentity(secondRoot, relativePath))
     expect(cssClassIdentity(firstRoot, relativePath)).not.toBe(
       cssClassIdentity(firstRoot, otherRelativePath),
     )
-    expect(plugin.resolveId(join(firstRoot, relativePath), undefined))
-      .not.toBe(plugin.resolveId(join(firstRoot, otherRelativePath), undefined))
+    expect(repositoryCssModuleVirtualId(firstRoot, join(firstRoot, relativePath)))
+      .not.toBe(repositoryCssModuleVirtualId(firstRoot, join(firstRoot, otherRelativePath)))
   })
 
   it('emits byte-identical virtual ids, modules, and bundles across checkout roots', async () => {
@@ -143,14 +143,14 @@ describe('client bundle CSS Modules', () => {
   })
 
   it('sorts CSS export keys independently of transform insertion order', () => {
-    const permutations = [
+    const permutations: readonly (readonly (readonly [string, { readonly name: string }])[])[] = [
       [['zeta', { name: 'hash_zeta' }], ['alpha', { name: 'hash_alpha' }], ['middle', { name: 'hash_middle' }]],
       [['alpha', { name: 'hash_alpha' }], ['middle', { name: 'hash_middle' }], ['zeta', { name: 'hash_zeta' }]],
       [['middle', { name: 'hash_middle' }], ['zeta', { name: 'hash_zeta' }], ['alpha', { name: 'hash_alpha' }]],
       [['zeta', { name: 'hash_zeta' }], ['middle', { name: 'hash_middle' }], ['alpha', { name: 'hash_alpha' }]],
       [['alpha', { name: 'hash_alpha' }], ['zeta', { name: 'hash_zeta' }], ['middle', { name: 'hash_middle' }]],
       [['middle', { name: 'hash_middle' }], ['alpha', { name: 'hash_alpha' }], ['zeta', { name: 'hash_zeta' }]],
-    ] as const
+    ]
     const serialized = permutations.map(entries => JSON.stringify(sortedCssModuleClassMap(Object.fromEntries(entries))))
 
     expect(new Set(serialized)).toEqual(new Set([
@@ -185,6 +185,37 @@ describe('client bundle CSS Modules', () => {
     expect(() => plugin.resolveId?.('./Escape.module.css', importer))
       .toThrow(/outside the repository root/i)
     expect(watched).toEqual([])
+  })
+
+  it('rejects a repository-internal directory link that resolves outside before watch or read', async () => {
+    const temporaryRoot = await mkdtemp(join(tmpdir(), 'dsh-client-css-link-'))
+    const repositoryRoot = join(temporaryRoot, 'checkout')
+    const outsideRoot = join(temporaryRoot, 'outside')
+    const linkedDirectory = join(repositoryRoot, 'packages', 'client', 'escaped')
+    const outsideStylesheet = join(outsideRoot, 'Escape.module.css')
+    let linked = false
+    try {
+      await mkdir(dirname(linkedDirectory), { recursive: true })
+      await mkdir(outsideRoot, { recursive: true })
+      // Invalid CSS makes any accidental read/transform path fail with the
+      // wrong diagnostic; containment must win before I/O instead.
+      await writeFile(outsideStylesheet, '.broken {')
+      await symlink(outsideRoot, linkedDirectory, process.platform === 'win32' ? 'junction' : 'dir')
+      linked = true
+      const plugin = cssModulesInlinePlugin('@deepseek-ai/dsh-client-test', repositoryRoot)
+      const linkedStylesheet = join(linkedDirectory, 'Escape.module.css')
+      const watched: string[] = []
+
+      expect(() => plugin.resolveId(linkedStylesheet, undefined))
+        .toThrow(/outside the repository root/i)
+      const forgedVirtualId = '\0dsh-css:packages/client/escaped/Escape.module.css.mjs'
+      await expect(plugin.load.call({ addWatchFile: id => watched.push(id) }, forgedVirtualId))
+        .rejects.toThrow(/outside the repository root/i)
+      expect(watched).toEqual([])
+    } finally {
+      if (linked) await unlink(linkedDirectory)
+      await rm(temporaryRoot, { recursive: true, force: true })
+    }
   })
 
   it.each([

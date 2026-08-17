@@ -9,7 +9,7 @@
  * The virtual loader registers each real stylesheet as a watch dependency.
  */
 import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, posix, relative, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { UserConfig } from 'tsdown'
@@ -130,6 +130,23 @@ export function repositoryCssModuleFileId(repositoryRoot: string, virtualId: str
   return fileId
 }
 
+interface CanonicalCssModulePath {
+  readonly repositoryRoot: string
+  readonly fileId: string
+  readonly filename: string
+}
+
+/** Resolve filesystem links and enforce physical containment before CSS I/O. */
+function canonicalCssModulePath(repositoryRoot: string, fileId: string): CanonicalCssModulePath {
+  const canonicalRoot = realpathSync(repositoryRoot)
+  const canonicalFileId = realpathSync(fileId)
+  return {
+    repositoryRoot: canonicalRoot,
+    fileId: canonicalFileId,
+    filename: repositoryCssModuleFilename(canonicalRoot, canonicalFileId),
+  }
+}
+
 /**
  * Normalize Lightning CSS export insertion order before serializing module JS.
  * @param cssExports - Class-name exports produced by Lightning CSS.
@@ -161,12 +178,18 @@ export function cssModulesInlinePlugin(id: string, repositoryRoot: string) {
         : importer !== undefined
           ? sourceAssetPath(source, importer)
           : resolvePath(source)
-      return repositoryCssModuleVirtualId(repositoryRoot, fileId)
+      repositoryCssModuleFilename(repositoryRoot, fileId)
+      const canonical = canonicalCssModulePath(repositoryRoot, fileId)
+      return repositoryCssModuleVirtualId(canonical.repositoryRoot, canonical.fileId)
     },
     async load(this: { addWatchFile(fileId: string): void }, virtualId: string) {
       if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-      const fileId = repositoryCssModuleFileId(repositoryRoot, virtualId)
-      const filename = repositoryCssModuleFilename(repositoryRoot, fileId)
+      const requestedFileId = repositoryCssModuleFileId(repositoryRoot, virtualId)
+      const canonical = canonicalCssModulePath(repositoryRoot, requestedFileId)
+      const { fileId, filename } = canonical
+      if (repositoryCssModuleVirtualId(canonical.repositoryRoot, fileId) !== virtualId) {
+        throw new Error('Invalid CSS Module virtual id')
+      }
       // The virtual id otherwise hides the physical stylesheet from Rolldown's watch graph.
       this.addWatchFile(fileId)
       const source = await readFile(fileId)

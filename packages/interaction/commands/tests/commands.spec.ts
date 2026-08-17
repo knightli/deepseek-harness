@@ -53,6 +53,25 @@ describe('parseCommand()', () => {
 })
 
 describe('CommandRuntime', () => {
+  it('tracks a known name until every global and scoped registration is disposed', async () => {
+    const ctx = await mount()
+    const first = await mintAgentScope(ctx, 'known-first')
+    const second = await mintAgentScope(ctx, 'known-second')
+    expect(ctx.commands.has('shared')).toBe(false)
+
+    const disposeGlobal = ctx.commands.register(command('shared', 'global'))
+    const disposeFirst = first.scope.ctx.commands.register(command('shared', 'first'))
+    const disposeSecond = second.scope.ctx.commands.register(command('shared', 'second'))
+    expect(ctx.commands.has('shared')).toBe(true)
+
+    disposeGlobal()
+    expect(ctx.commands.has('shared')).toBe(true)
+    disposeFirst()
+    expect(ctx.commands.has('shared')).toBe(true)
+    disposeSecond()
+    expect(ctx.commands.has('shared')).toBe(false)
+  })
+
   it('lists immutable global descriptors with input metadata', async () => {
     const ctx = await mount()
     const { agent } = await mintAgentScope(ctx, 'a')

@@ -291,6 +291,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the agent, or undefined when no live agent has that id.',
       },
       {
+        signature: 'sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined',
+        description: 'Read the session-operation capabilities of the factory that owns a live Session, or of the active factory that would resume a cold Session. This method never creates or resumes an Agent.',
+        parameters: [{ name: 'id', description: 'shared Agent/Session id whose factory behavior is queried.' }],
+        returns: 'the factory declaration, or `undefined` for the stock defaults.',
+      },
+      {
         signature: 'isOwnedBy(id: SessionId, owner: Agent): boolean',
         description: 'Test whether a live agent was created through one exact parent agent\'s scoped context. Runtime ownership is independent of durable session lineage and remains unambiguous when unrelated providers reuse an id.',
         parameters: [{ name: 'id', description: 'the candidate child agent\'s shared agent/session id.' }, { name: 'owner', description: 'the expected runtime creator agent.' }],
@@ -454,6 +460,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register a global or calling-agent-scoped command.',
         parameters: [{ name: 'definition', description: 'discovery metadata and direct UI handler.' }],
         returns: 'the exact effect disposer that unregisters this definition.',
+      },
+      {
+        signature: 'has(name: string): boolean',
+        description: 'Test whether any global or scoped layer registers one command name. This coarse read proves only a definite miss without requiring an Agent; callers still use find after Agent resolution for the effective scoped definition.',
+        parameters: [{ name: 'name', description: 'command name without a slash.' }],
+        returns: 'whether at least one layer currently registers the name.',
       },
       {
         signature: '@Remote list(agent: Agent): readonly CommandDescriptor[]',
@@ -2629,7 +2641,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AgentFactory',
-    declaration: 'export interface AgentFactory {\n    createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>;\n    resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>;\n}',
+    declaration: 'export interface AgentFactory {\n    readonly sessionCapabilities?: AgentFactorySessionCapabilities;\n    createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>;\n    resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>;\n}',
+  },
+  {
+    name: 'AgentFactorySessionCapabilities',
+    declaration: 'export interface AgentFactorySessionCapabilities {\n    readonly forkFromSeed?: boolean;\n}',
   },
   {
     name: 'AgentHandle',

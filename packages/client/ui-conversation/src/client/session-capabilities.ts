@@ -9,19 +9,29 @@ export const UNAVAILABLE_SESSION_CAPABILITIES: SessionCapabilities = Object.free
   fork: false,
 })
 
-/** Read one session's operation admission without introducing a second store. */
+interface LoadedSessionCapabilities {
+  readonly sessionId: SessionId | undefined
+  readonly load: (sessionId: SessionId) => Promise<SessionCapabilities>
+  readonly capabilities: SessionCapabilities
+}
+
+/**
+ * Read one session's operation admission without introducing a second store.
+ * @param sessionId - exact session whose operations the caller may expose.
+ * @param load - current authoritative capability reader.
+ * @returns the matching loaded snapshot, or the fail-closed snapshot while unavailable.
+ */
 export function useSessionCapabilities(
   sessionId: SessionId | undefined,
   load: (sessionId: SessionId) => Promise<SessionCapabilities>,
 ): SessionCapabilities {
-  const [capabilities, setCapabilities] = useState(UNAVAILABLE_SESSION_CAPABILITIES)
+  const [loaded, setLoaded] = useState<LoadedSessionCapabilities>()
 
   useEffect(() => {
     let current = true
-    setCapabilities(UNAVAILABLE_SESSION_CAPABILITIES)
     if (sessionId !== undefined) {
       void load(sessionId).then((next) => {
-        if (current) setCapabilities(next)
+        if (current) setLoaded({ sessionId, load, capabilities: next })
       }).catch(() => {
         // Loading and transport/schema failures retain the fail-closed snapshot.
       })
@@ -29,5 +39,7 @@ export function useSessionCapabilities(
     return () => { current = false }
   }, [load, sessionId])
 
-  return capabilities
+  return loaded !== undefined && loaded.sessionId === sessionId && loaded.load === load
+    ? loaded.capabilities
+    : UNAVAILABLE_SESSION_CAPABILITIES
 }

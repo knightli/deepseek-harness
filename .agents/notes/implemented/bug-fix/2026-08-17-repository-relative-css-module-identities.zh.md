@@ -10,13 +10,13 @@ Client bundle 插件把样式表的绝对路径传给 Lightning CSS。Lightning 
 
 ## Decision
 
-CSS Module resolver 的虚拟模块 id 只编码仓库相对 POSIX 路径。loader 校验这个规范 id，在配置的仓库 root 下还原绝对样式表路径用于读取和注册 watch，并把同一个相对路径作为 `filename` 传给 Lightning CSS。空路径、绝对路径、反斜杠、驱动器或流分隔符、非规范路径段以及所有父目录穿越都会在文件 I/O 前失败，因此 checkout root 和逃逸文件都不会进入生成模块标识。
+CSS Module resolver 的虚拟模块 id 只编码仓库相对 POSIX 路径。在解析 id 或读取及 watch 文件前，插件会对配置的仓库 root 和样式表同时应用 `realpath`，并要求物理文件仍位于物理 root 内。虚拟 id 与传给 Lightning CSS 的 `filename` 都从该规范相对路径推导。空路径、绝对路径、反斜杠、驱动器或流分隔符、非规范路径段、父目录穿越，以及从 root 内部通过 symlink 或 junction 逃逸到外部的路径，都会在文件 I/O 前失败，因此 checkout root 和逃逸文件都不会进入生成模块标识。
 
 仓库相对路径仍是标识输入的一部分。同一源码路径在不同 checkout root 下会生成相同类名和 Rolldown region comment，不同 package 或样式表路径仍会形成不同哈希输入。loader 还会在构造序列化 JavaScript class map 前对 Lightning CSS export key 排序，在不改变任何 key 或 value 的前提下消除 transform 插入顺序对字节的影响。
 
 ## Verification
 
-Client bundle CSS 测试会在两个不同绝对 checkout root 下创建相同样式表，并要求虚拟 id、生成模块源码和完整 Rolldown bundle 字节相等。测试还要求不同相对路径生成不同标识，证明非法及仓库外虚拟 id 会在 read/watch I/O 前失败，并继续证明 loader watch 的是还原后的绝对源文件。重复打乱 CSS export 插入顺序必须得到相同序列化结果，而 key 或 value 变化必须改变输出。
+Client bundle CSS 测试会在两个不同绝对 checkout root 下创建相同样式表，并要求虚拟 id、生成模块源码和完整 Rolldown bundle 字节相等。测试还要求不同相对路径生成不同标识，证明非法及仓库外虚拟 id 会在 read/watch I/O 前失败，并继续证明 loader watch 的是规范绝对源文件。跨平台 fixture 会使用目录 symlink，Windows 上使用 junction，从仓库 root 内指向外部样式表，并要求解析和伪造虚拟 id 的加载都失败且不注册 watch。重复打乱 CSS export 插入顺序必须得到相同序列化结果，而 key 或 value 变化必须改变输出。
 
 ## Alternatives considered
 
@@ -28,4 +28,4 @@ Client bundle CSS 测试会在两个不同绝对 checkout root 下创建相同�
 
 ## Consequences
 
-CSS Module 标识和生成的 client-bundle 字节可以跨干净 checkout 位置复现，并继续对仓库相对文件位置与 export 内容敏感。由该构建插件处理的样式表必须位于仓库 root 内并使用规范的相对虚拟 id；非法或逃逸标识会在文件访问前终止构建。编译器 region comment、CSS Module 哈希和 source map 均保持启用，也不引入构建后重写步骤。
+CSS Module 标识和生成的 client-bundle 字节可以跨干净 checkout 位置复现，并继续对仓库相对文件位置与 export 内容敏感。由该构建插件处理的样式表必须在物理上位于仓库 root 内，并使用规范的相对虚拟 id；仅通过逃逸 symlink 或 junction 实现的词法包含关系不够。非法或逃逸标识会在文件访问前终止构建。编译器 region comment、CSS Module 哈希和 source map 均保持启用，也不引入构建后重写步骤。

@@ -216,6 +216,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   Agent: 'core.md',
   AgentCancelCause: 'core.md',
   AgentFactory: 'core.md',
+  AgentFactorySessionCapabilities: 'core.md',
   AgentHandle: 'core.md',
   AgentSetupCommit: 'core.md',
   ModelSelection: 'core.md',

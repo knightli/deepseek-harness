@@ -150,7 +150,7 @@ function emptyWorkspaces() {
 }
 
 function makeHarness(init?: Partial<ConversationSnapshot>, capabilities?: {
-  loadSessionCapabilities: () => Promise<{
+  loadSessionCapabilities: (sessionId: SessionId) => Promise<{
     readonly imageInput: boolean
     readonly modelSelection: boolean
     readonly fork: boolean
@@ -793,6 +793,35 @@ describe('ChatView', () => {
     })
     expect(h.forkAt).not.toHaveBeenCalled()
   })
+
+  it.each(['false', 'deferred', 'error'] as const)(
+    'omits branch admission across an A to B switch when B capability lookup is %s',
+    async (mode) => {
+      const secondSession = 's2' as SessionId
+      const pending = new Promise<{ imageInput: boolean; modelSelection: boolean; fork: boolean }>(() => undefined)
+      const loadSessionCapabilities = vi.fn((sessionId: SessionId) => {
+        if (sessionId === SID) {
+          return Promise.resolve({ imageInput: true, modelSelection: true, fork: true })
+        }
+        if (mode === 'false') {
+          return Promise.resolve({ imageInput: true, modelSelection: true, fork: false })
+        }
+        if (mode === 'error') return Promise.reject(new Error('capability unavailable'))
+        return pending
+      })
+      const h = makeHarness({
+        nodes: [user(1, 'question'), assistant(2, 'answer')],
+        turnEnds: new Map([[1, 3]]),
+      }, { loadSessionCapabilities })
+      const view = render(<h.ChatView {...h.props} />)
+      expect(await view.findByRole('button', { name: '在新对话中分支' })).toBeTruthy()
+
+      view.rerender(<h.ChatView {...h.props} sessionId={secondSession} />)
+
+      expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()
+      expect(h.forkAt).not.toHaveBeenCalled()
+    },
+  )
 
   it('disables fork when the indexed Turn has a later steering Node', async () => {
     const base = chatSnapshotFixture({

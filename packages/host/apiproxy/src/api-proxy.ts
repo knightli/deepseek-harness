@@ -2604,6 +2604,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
           const commands = ctx.get('commands')
           if (parsed === undefined || commands === undefined) return unknown()
+          if (!commands.has(parsed.name)) return unknown()
           const live = ctx.agents.get(sessionId)
           if (live !== undefined && commands.find(live, parsed.name) === undefined) return unknown()
           const found = await agentFor(sessionId)

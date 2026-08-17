@@ -123,6 +123,16 @@ Human-command registry. Plain-context definitions are global; definitions regist
 register(definition: CommandDefinition): () => void
 
 /**
+ * Test whether any global or scoped layer registers one command name.
+ * This coarse read proves only a definite miss without requiring an Agent;
+ * callers still use {@link find} after Agent resolution for the effective
+ * scoped definition.
+ * @param name - command name without a slash.
+ * @returns whether at least one layer currently registers the name.
+ */
+has(name: string): boolean
+
+/**
  * List the effective immutable command descriptors for one agent.
  * @param agent - exact receiving agent and scoped-layer key.
  * @returns name-sorted descriptors after scoped shadowing.
