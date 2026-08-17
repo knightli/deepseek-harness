@@ -421,13 +421,13 @@ async list(): Promise<AgentPreset[]>
 async resolve(id?: string): Promise<AgentPreset>
 
 /**
- * Compose one agent from a preset: ensure the preset's standing mount, then
- * parent the agent's scope key to it so the mount's registrations and
- * listeners cover this agent.
+ * Low-level composition primitive for callers that do not publish an Agent:
+ * ensure the preset's standing mount, then parent the agent's scope key to it
+ * so the mount's registrations and listeners cover this agent.
  *
- * Call from the agent factory's `setup(agentCtx)`; a rejection there rolls
- * the agent creation back, so a broken preset never yields a half-composed
- * session.
+ * This method provides no publication receipt. Agent setup and every other
+ * publication path must use {@link mountForPublication} and return its
+ * receipt from `AgentSetup`.
  * @param agentCtx - the agent's scope context.
  * @param id - the preset id, or `undefined` for {@link defaultId}.
  * @returns the preset that was composed, for the caller to record.
@@ -446,7 +446,7 @@ async mount(agentCtx: Context, id?: string): Promise<AgentPreset>
  * @param id - preset id, or `undefined` for {@link defaultId}.
  * @returns the receipt the Agent factory must commit.
  */
-async mountForPublication(agentCtx: Context, id?: string): Promise<AgentPresetSetupCommit>
+async mountForPublication(agentCtx: Context, id?: string): Promise<AgentSetupCommit>
 
 /**
  * Join one agent to the SAME standing composition another already runs on.
@@ -575,7 +575,7 @@ async standingKeyFor(id?: string): Promise<ScopeKey>
 
 Types: [ScopeKey](scope.md)
 
-Source: [`packages/preset/agent-presets/src/index.ts:94`](../../packages/preset/agent-presets/src/index.ts)
+Source: [`packages/preset/agent-presets/src/index.ts:88`](../../packages/preset/agent-presets/src/index.ts)
 
 <a id="ctxagents--agentregistry"></a>
 

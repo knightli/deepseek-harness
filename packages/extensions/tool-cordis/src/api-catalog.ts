@@ -150,13 +150,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async mount(agentCtx: Context, id?: string): Promise<AgentPreset>',
-        description: 'Compose one agent from a preset: ensure the preset\'s standing mount, then parent the agent\'s scope key to it so the mount\'s registrations and listeners cover this agent.\n\nCall from the agent factory\'s `setup(agentCtx)`; a rejection there rolls the agent creation back, so a broken preset never yields a half-composed session.',
+        description: 'Low-level composition primitive for callers that do not publish an Agent: ensure the preset\'s standing mount, then parent the agent\'s scope key to it so the mount\'s registrations and listeners cover this agent.\n\nThis method provides no publication receipt. Agent setup and every other publication path must use mountForPublication and return its receipt from `AgentSetup`.',
         parameters: [{ name: 'agentCtx', description: 'the agent\'s scope context.' }, { name: 'id', description: 'the preset id, or `undefined` for {@link defaultId}.' }],
         returns: 'the preset that was composed, for the caller to record.',
         throws: ['when the preset is unknown or its composition is unusable.'],
       },
       {
-        signature: 'async mountForPublication(agentCtx: Context, id?: string): Promise<AgentPresetSetupCommit>',
+        signature: 'async mountForPublication(agentCtx: Context, id?: string): Promise<AgentSetupCommit>',
         description: 'Compose an unpublished Agent and return its exact publication receipt.\n\nThe caller must return this receipt from `AgentSetup`. Its synchronous `commit()` validates the roster generation, standing scope/root fibers, and exact binding after every setup await has settled and immediately before publication. It does not promise that every row survives roster HMR.',
         parameters: [{ name: 'agentCtx', description: 'the unpublished Agent\'s scoped setup context.' }, { name: 'id', description: 'preset id, or `undefined` for {@link defaultId}.' }],
         returns: 'the receipt the Agent factory must commit.',
@@ -2642,10 +2642,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AgentPreset',
     declaration: 'export interface AgentPreset {\n    readonly id: string;\n    readonly trust: PresetTrust;\n    readonly path: string;\n    readonly name?: string;\n    readonly description?: string;\n    readonly order?: number;\n    readonly broken?: string;\n}',
-  },
-  {
-    name: 'AgentPresetSetupCommit',
-    declaration: 'export interface AgentPresetSetupCommit extends AgentSetupCommit {\n    readonly presetId: string;\n}',
   },
   {
     name: 'AgentSetup',

@@ -14,7 +14,7 @@
 - `ctx.agentPresets.list(): Promise<AgentPreset[]>` 当前各根目录提供的全部 preset；id 重复时靠前的根目录胜出；损坏的 preset 也在其中，各自携带原因。
 - `ctx.agentPresets.resolve(id?): Promise<AgentPreset>` 按 id 取一个 preset，缺省取 `defaultId`。没有任何根目录提供该 id 时抛错，并列出可用 id。损坏的 preset 照样解析——删除、读取与上报都需要这一行。
 - `ctx.agentPresets.mount(agentCtx, id?): Promise<AgentPreset>` 底层组装原语：确保常驻挂载（并发去重）、把 agent 的 scope key 认父到它，并返回 preset。它不会防止 roster 在此后发布 Agent 前被卸载；会发布 agent 的 `AgentSetup` **必须**改用 `mountForPublication()`。对损坏的 preset 直接以发现时记下的原因拒绝，所以每种不可加载的形态都在加载器介入之前以同一方式失败。
-- `ctx.agentPresets.mountForPublication(agentCtx, id?): Promise<AgentPresetSetupCommit>` 组装尚未发布的 agent，并返回其 `AgentSetup` 必须返回的 receipt。工厂会在全部 setup await 结束后、紧邻发布前同步 commit；该 commit 重新验证精确 roster 代际、常驻挂载、scope 父链与 binding，使卸载导致整次创建回滚，而不是发布一个退化为 Host 组装的 agent。
+- `ctx.agentPresets.mountForPublication(agentCtx, id?): Promise<AgentSetupCommit>` 组装尚未发布的 agent，并返回其 `AgentSetup` 必须返回的 receipt。工厂会在全部 setup await 结束后、紧邻发布前同步 commit；该 commit 重新验证精确 roster 代际、常驻挂载、scope 父链与 binding，使卸载导致整次创建回滚，而不是发布一个退化为 Host 组装的 agent。
 - `ctx.agentPresets.composeFrom(agentCtx, parentCtx): string | undefined` 让一个 agent 加入另一个 agent 已在运行的常驻组装，返回所加入的 preset id——父方未加入任何 preset 时返回 `undefined`，那是无 roster 的部署，不是错误。这是认父而非挂载，因此同步、且自身没有组装失败模式；调用方用错（上下文无 scope、agent 已加入过）仍会拒绝。
 - `ctx.agentPresets.composedPreset(agentCtx): string | undefined` 某个**活着的** agent 正在运行的 preset，从其 scope 链读取而不是从其会话读取——对于持久化 header 尚在构建中的 agent，这是唯一能拿到的答案。
 - `ctx.agentPresets.recompose(agentCtx, id): Promise<AgentPreset>` 把一个 agent 重链到另一个 preset 的常驻组装。仅在该 agent 尚无任何产出时合法——**由调用方负责该检查**；新挂载在链移动之前确保完成，失败时 agent 原封不动。与 `mount()` 一样拒绝损坏的 preset。
@@ -141,7 +141,7 @@ Indirectly, through the plugins a standing composition registers, which own ever
 
 #### KV Cache effect
 
-在一个 agent 的整个生命周期内保持前缀稳定：组装只装入一次，发生在 agent 发布之前、因而也在它的首个请求之前，且在 agent 运行期间不再重新读取。为新会话选择不同的 preset，只会为该会话建立不同的前缀，无法让任何已在运行的会话失去缓存复用。
+在活动 roster 代际仍拥有 agent 的常驻组装时保持前缀稳定：组装只装入一次，发生在 agent 发布之前、因而也在它的首个请求之前，且在该代际内不再重新读取。为新会话选择不同的 preset，只会为该会话建立不同的前缀。roster 卸载或重启会拆掉既有常驻组装，因此本包不保证这些 agent 在该代际结束后仍保持缓存前缀稳定。
 
 ## 已知限制与暂缓事项
 

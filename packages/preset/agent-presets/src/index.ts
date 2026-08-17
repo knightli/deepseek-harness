@@ -51,12 +51,6 @@ export interface AgentPresetSettings {
   default?: string
 }
 
-/** Publication receipt for one preset composition prepared on an unpublished Agent. */
-export interface AgentPresetSetupCommit extends AgentSetupCommit {
-  /** Preset whose exact roster generation and standing mount the receipt validates. */
-  readonly presetId: string
-}
-
 /** Runtime schema for the user-writable slice. */
 export const AgentPresetSettingsSchema: z<AgentPresetSettings> = z.object({
   default: z.string(),
@@ -317,13 +311,13 @@ export class AgentPresets extends Service {
   }
 
   /**
-   * Compose one agent from a preset: ensure the preset's standing mount, then
-   * parent the agent's scope key to it so the mount's registrations and
-   * listeners cover this agent.
+   * Low-level composition primitive for callers that do not publish an Agent:
+   * ensure the preset's standing mount, then parent the agent's scope key to it
+   * so the mount's registrations and listeners cover this agent.
    *
-   * Call from the agent factory's `setup(agentCtx)`; a rejection there rolls
-   * the agent creation back, so a broken preset never yields a half-composed
-   * session.
+   * This method provides no publication receipt. Agent setup and every other
+   * publication path must use {@link mountForPublication} and return its
+   * receipt from `AgentSetup`.
    * @param agentCtx - the agent's scope context.
    * @param id - the preset id, or `undefined` for {@link defaultId}.
    * @returns the preset that was composed, for the caller to record.
@@ -344,11 +338,10 @@ export class AgentPresets extends Service {
    * @param id - preset id, or `undefined` for {@link defaultId}.
    * @returns the receipt the Agent factory must commit.
    */
-  async mountForPublication(agentCtx: Context, id?: string): Promise<AgentPresetSetupCommit> {
+  async mountForPublication(agentCtx: Context, id?: string): Promise<AgentSetupCommit> {
     const prepared = await this.prepareMount(agentCtx, id)
     const { preset, standing, mounted, agentKey, binding } = prepared
     return {
-      presetId: preset.id,
       commit: () => {
         this.assertGenerationActive(preset.id)
         const current = standingMountFor(agentCtx)
