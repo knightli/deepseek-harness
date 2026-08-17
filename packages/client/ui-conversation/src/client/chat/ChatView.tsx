@@ -19,6 +19,7 @@ import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { PendingSteeringBubble } from './MessageItem.tsx'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
 import { formatRunDuration } from './message-chrome.ts'
+import { useSessionCapabilities } from '../session-capabilities.ts'
 import css from './ChatView.module.css'
 
 const FOLLOW_THRESHOLD = 24
@@ -145,7 +146,7 @@ function TurnStatus({ startTime, t }: {
  */
 export function ChatView({
   useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt,
-  fileMentions, t,
+  loadSessionCapabilities, fileMentions, t,
 }: ChatViewSlotProps) {
   const order = useSession(s => s.chat.order)
   const nodeStore = useSession(s => s.chat.nodes)
@@ -159,6 +160,7 @@ export function ChatView({
   const hasMore = useSession(s => s.hasMore)
   const loadingOlder = useSession(s => s.loadingOlder)
   const selectedCallId = useStore(s => s.selection?.callId)
+  const { fork } = useSessionCapabilities(sessionId, loadSessionCapabilities)
 
   const pendingSteering = useMemo(
     () => inbox.filter(item => item.placement === 'steering'),
@@ -388,7 +390,7 @@ export function ChatView({
               cwd={cwd}
               openFile={openFile}
               inspectCall={inspectCall}
-              forkAt={forkAt}
+              forkAt={fork ? forkAt : undefined}
               loadImage={loadImage}
               fileMentions={fileMentions}
               renderSlot={renderSlot}

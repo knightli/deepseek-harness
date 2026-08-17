@@ -499,7 +499,10 @@ describe('Web session model selection', () => {
       content: [{ type: 'text' as const, text: 'external work' }],
     })
 
-    expect(expectValue(await api.sessions.models(request({ sessionId }))).routable).toBe(true)
+    expect(expectValue(await api.sessions.models(request({ sessionId })))).toMatchObject({
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: false, fork: true },
+    })
     expect((await api.sessions.prompt(promptRequest)).result).toEqual({
       ok: true,
       value: { accepted: true },

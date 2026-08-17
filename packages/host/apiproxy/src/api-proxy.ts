@@ -67,8 +67,7 @@ import type {} from '@deepseek-ai/dsh-session-projection-cache'
 // GoalError narrows domain rejections to their stable codes at the wire boundary.
 import { GoalError } from '@deepseek-ai/dsh-goal'
 import type { GoalRef as CoreGoalRef } from '@deepseek-ai/dsh-goal'
-// Type-only edges: resolve the command-change stream and `ctx.get('skills')`.
-import type {} from '@deepseek-ai/dsh-commands'
+import { parseCommand } from '@deepseek-ai/dsh-commands'
 // Type-only: the dynamic-package runner's forwarded-event declarations. Its
 // client-safe `./types` subpath deliberately, not the package root — the root
 // merges `ctx.dynamicCordisRunner`, and a dependency on that package would
@@ -1912,6 +1911,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return executesTextExternally(agent) || routeServed(provider)
   }
 
+  /** Session operations admitted by the live Agent and its owning factory. */
+  function sessionCapabilities(agent: Agent) {
+    const externalText = executesTextExternally(agent)
+    return {
+      imageInput: !externalText,
+      modelSelection: !externalText,
+      fork: ctx.agents.sessionCapabilities(agent.id)?.forkFromSeed !== false,
+    }
+  }
+
   /**
    * Resolve the addressed agent for `session.prompt`, enforce its accepted
    * input kind, and refuse registry-driven text execution when no adapter
@@ -2366,7 +2375,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const current = selectionFor(found.agent).current
         const { groups, failures } = await buildModelCatalog(ctx)
         const routable = textPromptRoutable(found.agent, current.provider)
-        return ok(request, { current: { ...current }, routable, groups, failures })
+        return ok(request, {
+          current: { ...current },
+          routable,
+          capabilities: sessionCapabilities(found.agent),
+          groups,
+          failures,
+        })
       },
 
       async selectModel(request) {
@@ -2459,6 +2474,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async fork(request) {
         const { sessionId, atSeq } = request.payload
+        if (ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed === false) {
+          return err(request, {
+            code: 'fork-unavailable',
+            message: 'fork is unavailable for this session',
+            details: { sessionId },
+          })
+        }
         let source: SessionReadState
         try {
           source = await readSessionState(sessionId)
@@ -2566,6 +2588,47 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             message: 'clientTimeZone must be UTC or a valid IANA Area/Location name',
             details: { value: clientTimeZone },
           })
+        }
+        const commandLine = content.length === 1
+          && content[0]?.type === 'text'
+          && content[0].text.startsWith('/')
+          ? content[0].text
+          : undefined
+        if (commandLine !== undefined) {
+          const parsed = parseCommand(commandLine)
+          const token = parsed === undefined ? /^\/[^\t\n\r ]*/u.exec(commandLine)?.[0] ?? '/' : `/${parsed.name}`
+          const unknown = () => err<{ accepted: true; command?: { kind: 'success'; text?: string } }>(request, {
+            code: 'unknown-command',
+            message: `unknown command "${token}"`,
+            details: {},
+          })
+          const commands = ctx.get('commands')
+          if (parsed === undefined || commands === undefined) return unknown()
+          const live = ctx.agents.get(sessionId)
+          if (live !== undefined && commands.find(live, parsed.name) === undefined) return unknown()
+          const found = await agentFor(sessionId)
+          if ('error' in found) return err(request, found.error)
+          if (commands.find(found.agent, parsed.name) === undefined) return unknown()
+          try {
+            const execution = await commands.execute(found.agent, commandLine, new AbortController().signal)
+            if (execution === undefined) return unknown()
+            if (execution.result.kind === 'error') {
+              return err(request, { code: 'command-error', message: execution.result.text, details: {} })
+            }
+            return ok(request, {
+              accepted: true as const,
+              command: {
+                kind: 'success' as const,
+                ...execution.result.text === undefined ? {} : { text: execution.result.text },
+              },
+            })
+          } catch (error: unknown) {
+            return err(request, {
+              code: 'command-error',
+              message: error instanceof Error ? error.message : String(error),
+              details: {},
+            })
+          }
         }
         const hasImage = content.some(part => part.type === 'image')
         const resolved = await turnAgentFor<{ accepted: true }>(

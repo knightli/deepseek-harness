@@ -5,7 +5,7 @@
 // decoration backdrop, error/notice strips, and the focus-keeping mousedown.
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import {
   createSnapshotStore, EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
@@ -89,6 +89,12 @@ interface BenchOptions {
   commandMenuOpen?: boolean
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
+  /** Private capability lookup injected by the conversation package apply. */
+  loadSessionCapabilities?: () => Promise<{
+    readonly imageInput: boolean
+    readonly modelSelection: boolean
+    readonly fork: boolean
+  }>
 }
 
 /** One pending queue row (the runtime snapshot shape, as the dock tests build it). */
@@ -141,7 +147,7 @@ function bench(over?: BenchOptions) {
     if (key === 'conversation.input.model') return over?.modelEntry ?? null
     return null
   }) as InputBarProps['renderSlot']
-  const props: InputBarProps = {
+  const props = {
     sessionId: SID,
     SessionProvider: ({ children }) => children(SID),
     useSession: bindSnapshotSelector(session),
@@ -189,6 +195,13 @@ function bench(over?: BenchOptions) {
     ...(over?.overlay !== undefined ? { overlay: over.overlay } : {}),
     ...(over?.leftItems !== undefined ? { leftItems: over.leftItems } : {}),
     ...(over?.rightItems !== undefined ? { rightItems: over.rightItems } : {}),
+    loadSessionCapabilities: over?.loadSessionCapabilities ?? (() => Promise.resolve({
+      imageInput: true,
+      modelSelection: true,
+      fork: true,
+    })),
+  } as InputBarProps & {
+    loadSessionCapabilities: NonNullable<BenchOptions['loadSessionCapabilities']>
   }
   const view = render(<InputBar {...props} />)
   const textarea = view.container.querySelector('textarea')!
@@ -204,10 +217,64 @@ function bench(over?: BenchOptions) {
   }
 }
 
+/** Flush the resolved default capability lookup and its React state write. */
+async function capabilitiesReady(): Promise<void> {
+  await act(async () => { await Promise.resolve() })
+}
+
 describe('image draft rail', () => {
-  it('collects clipboard files while preserving text from a mixed paste', () => {
+  it('fails closed without mutating the draft or image rail when capability lookup rejects', async () => {
+    const addImages = vi.fn(() => null)
+    const { view, textarea, shell } = bench({
+      draft: 'keep',
+      addImages,
+      loadSessionCapabilities: () => Promise.reject(new Error('models unavailable')),
+    })
+    const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+        getData: () => '',
+      },
+    })
+
+    await waitFor(() => {
+      expect(view.getByRole('alert').textContent).toContain('This session does not support image input.')
+    })
+    expect(addImages).not.toHaveBeenCalled()
+    expect(shell.snapshot.draft).toBe('keep')
+    expect(shell.snapshot.imageIds).toEqual([])
+  })
+
+  it('rejects a file drop when the session explicitly declines image input', async () => {
+    const addImages = vi.fn(() => null)
+    const { view, shell } = bench({
+      draft: 'keep',
+      addImages,
+      loadSessionCapabilities: () => Promise.resolve({
+        imageInput: false,
+        modelSelection: true,
+        fork: true,
+      }),
+    })
+    await capabilitiesReady()
+    const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
+
+    fireEvent.drop(document.body, {
+      dataTransfer: { types: ['Files'], files: [image], dropEffect: 'none' },
+    })
+
+    expect(view.getByRole('alert').textContent).toContain('This session does not support image input.')
+    expect(addImages).not.toHaveBeenCalled()
+    expect(shell.snapshot.draft).toBe('keep')
+    expect(shell.snapshot.imageIds).toEqual([])
+  })
+
+  it('collects clipboard files while preserving text from a mixed paste', async () => {
     const addImages = vi.fn(() => null)
     const { textarea, shell } = bench({ addImages })
+    await capabilitiesReady()
     const image = new File([Uint8Array.of(1, 2, 3)], 'pixel.png', { type: 'image/png' })
     fireEvent.paste(textarea, {
       clipboardData: {
@@ -222,9 +289,10 @@ describe('image draft rail', () => {
     expect(shell.snapshot.draft).toBe('同时粘贴的文字')
   })
 
-  it('accepts a drop anywhere on the page under the full-page overlay', () => {
+  it('accepts a drop anywhere on the page under the full-page overlay', async () => {
     const addImages = vi.fn(() => null)
     const { view } = bench({ addImages })
+    await capabilitiesReady()
     const image = new File([Uint8Array.of(1)], 'dropped.png', { type: 'image/png' })
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'none' }
     // The drag never touches the composer card: the listeners are page-wide.
@@ -237,9 +305,10 @@ describe('image draft rail', () => {
     expect(view.queryByRole('status')).toBeNull()
   })
 
-  it('keeps text drags native and hides the overlay when the drag leaves or ends', () => {
+  it('keeps text drags native and hides the overlay when the drag leaves or ends', async () => {
     const addImages = vi.fn(() => null)
     const { view } = bench({ addImages })
+    await capabilitiesReady()
     // A text drag carries no Files type: no overlay, native behavior stays.
     fireEvent.dragEnter(document.body, { dataTransfer: { types: ['text/plain'], files: [], dropEffect: 'none' } })
     expect(view.queryByRole('status')).toBeNull()
@@ -257,7 +326,7 @@ describe('image draft rail', () => {
     expect(addImages).not.toHaveBeenCalled()
   })
 
-  it('pre-checks projected limits at intake: whole-batch refusal with product copy, none added', () => {
+  it('pre-checks projected limits at intake: whole-batch refusal with product copy, none added', async () => {
     const limits = {
       maxImageBytes: 1024 * 1024,
       maxImagesPerMessage: 2,
@@ -271,12 +340,14 @@ describe('image draft rail', () => {
     }
     // Count: three at once over a two-image limit → the whole batch refused.
     const overCount = bench({ addImages: vi.fn(() => null), imageLimits: limits })
+    await capabilitiesReady()
     drop([png(8, 'a.png'), png(8, 'b.png'), png(8, 'c.png')])
     expect(overCount.view.getByRole('alert').textContent).toContain('一条消息最多添加 2 张图片')
     expect(overCount.props.addImages).not.toHaveBeenCalled()
     cleanup()
     // Per-file bytes.
     const overFile = bench({ addImages: vi.fn(() => null), imageLimits: limits })
+    await capabilitiesReady()
     drop([png(1024 * 1024 + 1, 'big.png')])
     expect(overFile.view.getByRole('alert').textContent).toContain('单张图片不能超过 1MB')
     expect(overFile.props.addImages).not.toHaveBeenCalled()
@@ -285,19 +356,21 @@ describe('image draft rail', () => {
     const held = new File([new ArrayBuffer(1024 * 1024 * 1.5)], 'held.png', { type: 'image/png' })
     const attachment = { kind: 'image' as const, id: 'draft-1' as DraftAttachmentId, file: held, previewUrl: 'blob:held' }
     const overTotal = bench({ addImages: vi.fn(() => null), imageLimits: limits, attachments: [attachment] })
+    await capabilitiesReady()
     drop([png(1024 * 1024, 'more.png')])
     expect(overTotal.view.getByRole('alert').textContent).toContain('图片总大小超过 2MB')
     expect(overTotal.props.addImages).not.toHaveBeenCalled()
     cleanup()
     // Within every limit: the batch passes through to addImages.
     const within = bench({ addImages: vi.fn(() => null), imageLimits: limits })
+    await capabilitiesReady()
     const fits = png(16, 'fits.png')
     drop([fits])
     expect(within.props.addImages).toHaveBeenCalledWith([fits])
     expect(within.view.queryByRole('alert')).toBeNull()
   })
 
-  it('announces the format problem before any limit when the batch holds a non-image', () => {
+  it('announces the format problem before any limit when the batch holds a non-image', async () => {
     const addImages = vi.fn(() => '仅支持 PNG、JPG、WebP、GIF 格式的图片')
     const { view } = bench({
       addImages,
@@ -309,6 +382,7 @@ describe('image draft rail', () => {
         mediaTypes: ['image/png'] as const,
       },
     })
+    await capabilitiesReady()
     // Oversized AND over-count AND wrong type: the format rejection wins.
     const files = [
       new File([new ArrayBuffer(64)], 'a.pdf', { type: 'application/pdf' }),
@@ -319,7 +393,7 @@ describe('image draft rail', () => {
     expect(view.getByRole('alert').textContent).toContain('仅支持 PNG、JPG、WebP、GIF 格式的图片')
   })
 
-  it('shows the projected limits in the drop overlay desc line', () => {
+  it('shows the projected limits in the drop overlay desc line', async () => {
     const { view } = bench({
       addImages: vi.fn(() => null),
       imageLimits: {
@@ -330,6 +404,7 @@ describe('image draft rail', () => {
         mediaTypes: ['image/png'] as const,
       },
     })
+    await capabilitiesReady()
     fireEvent.dragEnter(document.body, { dataTransfer: { types: ['Files'], files: [], dropEffect: 'none' } })
     expect(view.getByRole('status').textContent).toContain('最多 20 张，每张 5MB')
   })
@@ -351,9 +426,10 @@ describe('image draft rail', () => {
     expect(other.view.getByRole('alert').textContent).toContain('boom (internal)')
   })
 
-  it('shows the blocked overlay and refuses the drop while the composer is locked', () => {
+  it('shows the blocked overlay and refuses the drop while the composer is locked', async () => {
     const addImages = vi.fn(() => null)
     const { view } = bench({ addImages, inert: true })
+    await capabilitiesReady()
     const image = new File([Uint8Array.of(1)], 'dropped.png', { type: 'image/png' })
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'copy' }
     fireEvent.dragEnter(document.body, { dataTransfer })
@@ -386,11 +462,12 @@ describe('image draft rail', () => {
     expect(view.queryByRole('dialog', { name: '原图预览' })).toBeNull()
   })
 
-  it('announces an image-intake rejection as a fading toast, repeatable for the same reason', () => {
+  it('announces an image-intake rejection as a fading toast, repeatable for the same reason', async () => {
     vi.useFakeTimers()
     try {
       const addImages = vi.fn(() => '仅支持 PNG、JPG、WebP、GIF 格式的图片')
       const { view, textarea } = bench({ addImages })
+      await capabilitiesReady()
       const paste = () => {
         fireEvent.paste(textarea, {
           clipboardData: {
@@ -411,9 +488,10 @@ describe('image draft rail', () => {
     }
   })
 
-  it('announces a rejected drop through the same toast', () => {
+  it('announces a rejected drop through the same toast', async () => {
     const addImages = vi.fn(() => '图片读取服务不可用')
     const { view } = bench({ addImages })
+    await capabilitiesReady()
     const card = view.container.querySelector('[class*="card"]')!
     const dataTransfer = { types: ['Files'], files: [new File([Uint8Array.of(1)], 'x.png', { type: 'image/png' })], dropEffect: 'none' }
     fireEvent.drop(card, { dataTransfer })

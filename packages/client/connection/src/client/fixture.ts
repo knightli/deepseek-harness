@@ -2381,6 +2381,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         // The fixture's routes all serve; a surface exercising the blocked
         // posture drives it through its own stub.
         routable: true,
+        capabilities: { imageInput: true, modelSelection: true, fork: true },
         groups: fixtureModelGroups(),
         failures: [],
       }),

@@ -198,6 +198,7 @@ function mount(
           useProjection={(() => undefined)}
           useInput={useInput}
           inputActions={inputActions}
+          loadSessionCapabilities={() => Promise.resolve({ imageInput: true, modelSelection: true, fork: true })}
           keyboard={wiring}
           addImages={() => null}
           removeImage={() => {}}

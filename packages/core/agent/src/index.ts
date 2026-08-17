@@ -174,6 +174,12 @@ export interface AgentHandle {
   dispose(): Promise<void>
 }
 
+/** Factory-owned capabilities that apply to sessions created or resumed through it. */
+export interface AgentFactorySessionCapabilities {
+  /** Whether the factory can create a new Agent from a completed-session seed. */
+  readonly forkFromSeed?: boolean
+}
+
 /**
  * The agent-creation factory the loop implementation provides to the registry
  * via {@link AgentRegistry.setFactory}. Kept on the `dsh-agent` interface so
@@ -181,6 +187,11 @@ export interface AgentHandle {
  * depending on the concrete `dsh-agent-loop` package.
  */
 export interface AgentFactory {
+  /**
+   * Optional session-operation capabilities. Omission preserves the stock
+   * factory behavior, including seeded forks.
+   */
+  readonly sessionCapabilities?: AgentFactorySessionCapabilities
   /**
    * Create a new agent on a caller-supplied session id. Async because creation
    * awaits unpublished setup, invokes its optional synchronous commit, inserts
@@ -225,6 +236,8 @@ interface AgentEntry {
   /** Runtime creator-agent ownership; independent of durable session lineage. */
   readonly owner: Agent | undefined
   readonly carrier: Scoped<Agent>
+  /** Capabilities of the factory invocation that published this exact entry. */
+  readonly factorySessionCapabilities: AgentFactorySessionCapabilities | undefined
   announced: boolean
   announcing: boolean
   detachRequested: boolean
@@ -256,6 +269,7 @@ interface FactorySlot {
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
+  private readonly factorySessionCapabilities = new AsyncLocalStorage<AgentFactorySessionCapabilities | undefined>()
   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
@@ -410,8 +424,11 @@ export class AgentRegistry extends Service {
     // capability and need no Cordis tracker magic.
     const { target } = this.requireFactory()
     const receiver = getTraceable(ownerCtx, target)
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
-    return Reflect.apply(target.createAgent, receiver, [ownerCtx, options])
+    return this.factorySessionCapabilities.run(
+      target.sessionCapabilities,
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
+      () => Reflect.apply(target.createAgent, receiver, [ownerCtx, options]),
+    )
   }
 
   /**
@@ -425,8 +442,11 @@ export class AgentRegistry extends Service {
     const ownerCtx = this.ctx
     const { target } = this.requireFactory()
     const receiver = getTraceable(ownerCtx, target)
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
-    return Reflect.apply(target.resume, receiver, [ownerCtx, options])
+    return this.factorySessionCapabilities.run(
+      target.sessionCapabilities,
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
+      () => Reflect.apply(target.resume, receiver, [ownerCtx, options]),
+    )
   }
 
   /**
@@ -485,6 +505,7 @@ export class AgentRegistry extends Service {
       agent,
       owner,
       carrier,
+      factorySessionCapabilities: this.factorySessionCapabilities.getStore(),
       announced: false,
       announcing: false,
       detachRequested: false,
@@ -582,6 +603,19 @@ export class AgentRegistry extends Service {
    */
   get(id: SessionId): Agent | undefined {
     return this.store.get(id)?.agent
+  }
+
+  /**
+   * Read the session-operation capabilities of the factory that owns a live
+   * Session, or of the active factory that would resume a cold Session. This
+   * method never creates or resumes an Agent.
+   * @param id - shared Agent/Session id whose factory behavior is queried.
+   * @returns the factory declaration, or `undefined` for the stock defaults.
+   */
+  sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined {
+    const entry = this.store.get(id)
+    if (entry !== undefined) return entry.factorySessionCapabilities
+    return this.factory?.target.sessionCapabilities
   }
 
   /**

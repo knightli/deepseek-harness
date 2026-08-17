@@ -64,6 +64,7 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
             value: {
               current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
               routable: true,
+              capabilities: { imageInput: true, modelSelection: true, fork: true },
               groups: [],
               failures: [],
             },

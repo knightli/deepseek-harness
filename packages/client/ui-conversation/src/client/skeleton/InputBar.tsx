@@ -31,7 +31,10 @@ import {
 } from '../image-labels.ts'
 import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
+import { useSessionCapabilities } from '../session-capabilities.ts'
 import css from './InputBar.module.css'
+
+const IMAGE_INPUT_UNAVAILABLE = 'This session does not support image input.'
 
 /** Decoration product of the no-session state (no machine, empty draft). */
 const INERT_DECORATIONS: DraftDecorations = { token: null, chips: [], textRefs: [], hint: null }
@@ -45,7 +48,7 @@ export type InputBarProps = ComposerBarProps
 
 export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  resolveSubmitMode, toggleCommandMenu, stop, command, t,
+  loadSessionCapabilities, resolveSubmitMode, toggleCommandMenu, stop, command, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -88,6 +91,7 @@ export function InputBar({
   // The deployment's image-intake limits (absent while no attachment service
   // is composed — the pre-check below then defers entirely to the host).
   const imageLimits = useProjection('imageLimits')
+  const { imageInput } = useSessionCapabilities(sessionId, loadSessionCapabilities)
   // Prompt failures are ordinary failures (no create/attach transaction exists
   // anymore): the toast announces promptError, the draft stays in the machine,
   // and the user resubmits. A remount over a session whose machine still holds
@@ -397,6 +401,11 @@ export function InputBar({
       .filter(item => item.kind === 'file')
       .map(item => item.getAsFile())
       .filter((file): file is File => file !== null)
+    if (files.length > 0 && !imageInput) {
+      e.preventDefault()
+      showToast(IMAGE_INPUT_UNAVAILABLE)
+      return
+    }
     if (files.length > 0) intakeImages(files)
     const text = e.clipboardData.getData('text/plain')
     if (text === '') {
@@ -455,7 +464,7 @@ export function InputBar({
   // Text drags carry no 'Files' type and pass through untouched, keeping the
   // native drop-text-into-textarea path. The overlay layer itself is
   // pointer-inert, so it never disturbs the enter/leave count.
-  const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
+  const canAcceptDrop = imageInput && !locked && !machineBusy && addImages !== undefined
   useEffect(() => {
     const hasFiles = (event: globalThis.DragEvent): boolean =>
       event.dataTransfer?.types.includes('Files') ?? false
@@ -488,6 +497,10 @@ export function InputBar({
       if (!hasFiles(event)) return
       event.preventDefault()
       reset()
+      if (!imageInput) {
+        showToast(IMAGE_INPUT_UNAVAILABLE)
+        return
+      }
       if (!canAcceptDrop) return
       intakeImages([...(event.dataTransfer?.files ?? [])])
     }
@@ -503,7 +516,7 @@ export function InputBar({
       document.removeEventListener('drop', onDrop)
       window.removeEventListener('dragend', reset)
     }
-  }, [canAcceptDrop, intakeImages])
+  }, [canAcceptDrop, imageInput, intakeImages, showToast])
 
   const closePreview = useCallback(() => { setPreview(null) }, [])
 

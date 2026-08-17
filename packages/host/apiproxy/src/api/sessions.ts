@@ -148,6 +148,16 @@ export interface ModelCatalogFailure {
   message: string
 }
 
+/** Session operations the live Agent and its factory admit. */
+export interface SessionCapabilities {
+  /** Whether prompt admission accepts image parts. */
+  imageInput: boolean
+  /** Whether the session accepts model-selection changes. */
+  modelSelection: boolean
+  /** Whether a completed-turn prefix can seed a child session. */
+  fork: boolean
+}
+
 /** Detached model-directory snapshot for one session. */
 export interface SessionModels {
   /** Model selection for the session's next assembled step. */
@@ -160,6 +170,8 @@ export interface SessionModels {
    * rather than infer availability from the advisory `groups` catalog.
    */
   routable: boolean
+  /** Authoritative operation admission for native session controls. */
+  capabilities: SessionCapabilities
   /** Successfully loaded provider groups. */
   groups: ModelProviderGroup[]
   /** Provider-local failures; successful groups remain usable. */

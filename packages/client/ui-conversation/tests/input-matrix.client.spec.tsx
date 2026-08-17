@@ -49,6 +49,7 @@ function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled
     useProjection: (() => undefined),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
+    loadSessionCapabilities: () => Promise.resolve({ imageInput: true, modelSelection: true, fork: true }),
     keyboard: shell,
     addImages: () => null,
     removeImage: () => {},

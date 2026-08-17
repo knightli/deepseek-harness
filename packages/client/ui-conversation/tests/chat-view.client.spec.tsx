@@ -4,7 +4,7 @@
 // ObservableSnapshot fake, no wire or Tool presentation plugin.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { useEffect } from 'react'
 import type {
   AssistantMessageNode, CommandNode, CompactionSummaryNode, ConversationNode, ConversationSnapshot,
@@ -149,7 +149,13 @@ function emptyWorkspaces() {
   return bindSnapshotSelector(store)
 }
 
-function makeHarness(init?: Partial<ConversationSnapshot>) {
+function makeHarness(init?: Partial<ConversationSnapshot>, capabilities?: {
+  loadSessionCapabilities: () => Promise<{
+    readonly imageInput: boolean
+    readonly modelSelection: boolean
+    readonly fork: boolean
+  }>
+}) {
   const { set, source } = makeSource(init)
   const openDetails = vi.fn<(t: SelectionTarget) => void>()
   const openFile = vi.fn<(path: string) => void>()
@@ -262,7 +268,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
   // SessionProvider seat arrives with the session-scope child declaration;
   // ChatView never invokes it (render-prop pass-through stub).
   const SessionProviderStub: ChatViewSlotProps['SessionProvider'] = ({ children }) => <>{children(SID)}</>
-  const props: ChatViewSlotProps = {
+  const props = {
     sessionId: SID,
     useSession: bindSnapshotSelector(source),
     useSessions: emptySessions(),
@@ -291,7 +297,14 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
     fileMentions: () => undefined,
     // Mirrors the real lookup chain (conversation namespace, then common).
     t,
-  }
+    ...(capabilities ?? {
+      loadSessionCapabilities: () => Promise.resolve({
+        imageInput: true,
+        modelSelection: true,
+        fork: true,
+      }),
+    }),
+  } as ChatViewSlotProps & typeof capabilities
   const setSelection = (next: SelectionTarget | null): void => { chat.actions.select(next) }
   return {
     set, ChatView, props, openDetails, openFile, loadOlder, inspectCall,
@@ -445,7 +458,7 @@ describe('ChatView', () => {
       ])
   })
 
-  it('renders Host-pending steering at the flow tail and hands off to the durable node', () => {
+  it('renders Host-pending steering at the flow tail and hands off to the durable node', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -507,7 +520,7 @@ describe('ChatView', () => {
     })
     // The Turn Tail belongs to the closed Turn, independently of a later
     // steering bubble's placement in the Chat list.
-    const branchButtons = view.getAllByRole('button', { name: '在新对话中分支' })
+    const branchButtons = await view.findAllByRole('button', { name: '在新对话中分支' })
     expect(branchButtons).toHaveLength(1)
     expect(branchButtons[0]!.getAttribute('aria-disabled')).toBeNull()
     fireEvent.click(branchButtons[0]!)
@@ -608,7 +621,7 @@ describe('ChatView', () => {
     expect(h.toolOwners[0]?.inspectCall).toBe(h.inspectCall)
   })
 
-  it('shows assistant IconActions only on the last content message of each turn', () => {
+  it('shows assistant IconActions only on the last content message of each turn', async () => {
     const h = makeHarness({
       nodes: [
         user(1, 'hi'),
@@ -623,7 +636,7 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     // Branch renders only under assistant answers; user bubbles keep copy alone.
     expect(view.getAllByRole('button', { name: '复制' })).toHaveLength(4)
-    const branchButtons = view.getAllByRole('button', { name: '在新对话中分支' })
+    const branchButtons = await view.findAllByRole('button', { name: '在新对话中分支' })
     expect(branchButtons).toHaveLength(2)
     expect(branchButtons.map(button => button.getAttribute('aria-disabled'))).toEqual([null, null])
   })
@@ -727,21 +740,61 @@ describe('ChatView', () => {
     expect(view.queryByText(/用时/)).toBeNull()
   })
 
-  it('enables fork only on the finalized assistant at the completed transcript tail', () => {
+  it('enables fork only on the finalized assistant at the completed transcript tail', async () => {
     const h = makeHarness({
       nodes: [user(1, 'question'), assistant(2, 'answer')],
       turnEnds: new Map([[1, 3]]),
     })
     const view = render(<h.ChatView {...h.props} />)
     // The user bubble offers no branch; the settled answer's is live.
-    const buttons = view.getAllByRole('button', { name: '在新对话中分支' })
+    const buttons = await view.findAllByRole('button', { name: '在新对话中分支' })
     expect(buttons).toHaveLength(1)
     expect(buttons[0]!.getAttribute('aria-disabled')).toBeNull()
     fireEvent.click(buttons[0]!)
     expect(h.forkAt.mock.calls).toEqual([[2]])
   })
 
-  it('disables fork when the indexed Turn has a later steering Node', () => {
+  it('omits branch admission when session capability lookup fails', async () => {
+    const loadSessionCapabilities = vi.fn(() => Promise.reject(new Error('models unavailable')))
+    const h = makeHarness({
+      nodes: [user(1, 'question'), assistant(2, 'answer')],
+      turnEnds: new Map([[1, 3]]),
+    }, {
+      loadSessionCapabilities,
+    })
+    const view = render(<h.ChatView {...h.props} />)
+
+    await waitFor(() => {
+      expect(loadSessionCapabilities).toHaveBeenCalledWith(SID)
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()
+    expect(h.forkAt).not.toHaveBeenCalled()
+  })
+
+  it('omits branch admission when the session explicitly declines fork', async () => {
+    const loadSessionCapabilities = vi.fn(() => Promise.resolve({
+      imageInput: true,
+      modelSelection: true,
+      fork: false,
+    }))
+    const h = makeHarness({
+      nodes: [user(1, 'question'), assistant(2, 'answer')],
+      turnEnds: new Map([[1, 3]]),
+    }, { loadSessionCapabilities })
+    const view = render(<h.ChatView {...h.props} />)
+
+    await waitFor(() => {
+      expect(loadSessionCapabilities).toHaveBeenCalledWith(SID)
+    })
+    await act(async () => { await Promise.resolve() })
+    await waitFor(() => {
+      expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()
+    })
+    expect(h.forkAt).not.toHaveBeenCalled()
+  })
+
+  it('disables fork when the indexed Turn has a later steering Node', async () => {
     const base = chatSnapshotFixture({
       nodes: [user(1, 'question'), assistant(2, 'answer')],
       turnEnds: new Map([[1, 4]]),
@@ -757,13 +810,13 @@ describe('ChatView', () => {
     }
     const h = makeHarness({ chat })
     const view = render(<h.ChatView {...h.props} />)
-    const branch = view.getByRole('button', { name: '在新对话中分支' })
+    const branch = await view.findByRole('button', { name: '在新对话中分支' })
     expect(branch.getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(branch)
     expect(h.forkAt).not.toHaveBeenCalled()
   })
 
-  it('keeps final content actions but disables branch when Tool and interrupted Think follow it', () => {
+  it('keeps final content actions but disables branch when Tool and interrupted Think follow it', async () => {
     const interruptedThink: AssistantMessageNode = {
       kind: 'assistant', seq: 4.1, time: 4_100, turn: 1, step: 2,
       blocks: [{ kind: 'reasoning', text: 'bad path' }], interrupted: true,
@@ -774,7 +827,7 @@ describe('ChatView', () => {
     })
     const view = render(<h.ChatView {...h.props} />)
     expect(view.getAllByRole('button', { name: '复制' })).toHaveLength(2)
-    const buttons = view.getAllByRole('button', { name: '在新对话中分支' })
+    const buttons = await view.findAllByRole('button', { name: '在新对话中分支' })
     expect(buttons).toHaveLength(1)
     expect(buttons[0]!.getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(buttons[0]!)

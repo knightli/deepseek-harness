@@ -423,6 +423,26 @@ describe('AgentRegistry factory seam', () => {
     expect(calls.resume[0]?.ownerCtx.fiber).toBe(callerFiber)
   })
 
+  it.each([
+    ['omitted', undefined, true],
+    ['enabled', { forkFromSeed: true } as const, true],
+    ['disabled', { forkFromSeed: false } as const, false],
+  ])('reports the %s factory fork capability for its created session', async (
+    _label,
+    sessionCapabilities,
+    expected,
+  ) => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const sessionId = SessionId(`factory-capability-${String(expected)}-${String(sessionCapabilities?.forkFromSeed)}`)
+    const { factory } = stubFactory()
+    ctx.agents.setFactory({ ...factory, ...(sessionCapabilities === undefined ? {} : { sessionCapabilities }) })
+
+    await ctx.agents.create({ sessionId })
+
+    expect(ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed ?? true).toBe(expected)
+  })
+
   it('rejects a second factory and clears the slot with its owner (HMR)', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)

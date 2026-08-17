@@ -207,6 +207,7 @@ describe('sessions domain schemas', () => {
     expect(sessionModelsValueSchema.parse({
       current: { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'max' },
       routable: true,
+      capabilities: { imageInput: true, modelSelection: true, fork: false },
       groups: [{
         id: 'deepseek-official',
         name: 'DeepSeek',
@@ -225,6 +226,13 @@ describe('sessions domain schemas', () => {
       }],
       failures: [{ id: 'broken', name: 'Broken', message: 'offline' }],
     }).groups[0]?.models[0]?.id).toBe('deepseek-v4-flash')
+    expect(sessionModelsValueSchema.parse({
+      current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+      routable: true,
+      capabilities: { imageInput: true, modelSelection: true, fork: false },
+      groups: [],
+      failures: [],
+    })).toHaveProperty('capabilities.fork', false)
     expect(sessionSelectModelRequestSchema.parse({
       sessionId: 's1',
       provider: 'deepseek-official',

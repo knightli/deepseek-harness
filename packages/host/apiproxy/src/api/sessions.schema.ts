@@ -250,6 +250,11 @@ export const sessionModelsRequestSchema = z.object({
 export const sessionModelsValueSchema = z.object({
   current: modelSelectionSchema,
   routable: z.boolean(),
+  capabilities: z.object({
+    imageInput: z.boolean(),
+    modelSelection: z.boolean(),
+    fork: z.boolean(),
+  }),
   groups: z.array(modelProviderGroupSchema),
   failures: z.array(modelCatalogFailureSchema),
 }) satisfies z.ZodType<Wire<ResponseValue<'session.models'>>>

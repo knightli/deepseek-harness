@@ -88,6 +88,7 @@ export class FakeApiClient implements IApiClient {
   onModels: (payload: unknown) => Promise<RpcResponse<SessionModels>> = () => Promise.resolve(ok({
     current: this.defaultModel,
     routable: true,
+    capabilities: { imageInput: true, modelSelection: true, fork: true },
     groups: [{
       id: 'deepseek-official',
       name: 'DeepSeek',

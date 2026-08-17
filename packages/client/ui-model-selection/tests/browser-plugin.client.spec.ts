@@ -62,7 +62,16 @@ async function bench() {
     models: () => {
       calls.models += 1
       return Promise.resolve({
-        result: { ok: true as const, value: { current, routable, groups: GROUPS, failures: [] } },
+        result: {
+          ok: true as const,
+          value: {
+            current,
+            routable,
+            capabilities: { imageInput: true, modelSelection: true, fork: true },
+            groups: GROUPS,
+            failures: [],
+          },
+        },
       })
     },
     selectModel: (payload: { provider: string; model: string; reasoningEffort?: string }) => {

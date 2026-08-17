@@ -22,7 +22,10 @@ function request<P>(payload: P): RpcRequest<P> {
   return { rpcId: RpcId(`fork-${String(nextRpc++)}`), payload }
 }
 
-async function composed(workspaces: readonly Workspace[] = []): Promise<Context> {
+async function composed(
+  workspaces: readonly Workspace[] = [],
+  forkFromSeed?: boolean,
+): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt, { persona: '' })
@@ -30,6 +33,7 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
   await ctx.plugin(UserQuestionService)
   ctx.provide('workspaceRegistry', { list: () => workspaces } as never)
   ctx.agents.setFactory({
+    ...(forkFromSeed === undefined ? {} : { sessionCapabilities: { forkFromSeed } }),
     createAgent: async (ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> => {
       const session = ctx.sessions.create(options.sessionId, {
         ...options.seed === undefined ? {} : { seed: [...options.seed] },
@@ -87,6 +91,37 @@ const api = (ctx: Context) => createApiProxy(ctx, {
 })
 
 describe('sessions.fork', () => {
+  it('refuses a factory-disabled fork without changing the source or publishing a child', async () => {
+    const ctx = await composed([], false)
+    const sourceId = sid('session-fork-disabled')
+    const { agent } = await ctx.agents.create({
+      sessionId: sourceId,
+      meta: { cwd: '/proj' },
+    })
+    agent.session.append('turn/start', { turn: 1 })
+    agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'source remains exact' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const beforeEvents = [...agent.session.events]
+    const beforeSessions = ctx.sessions.list().map(session => session.id)
+
+    const response = await api(ctx).sessions.fork(request({ sessionId: sourceId }))
+
+    expect(response.result).toEqual({
+      ok: false,
+      error: {
+        code: 'fork-unavailable',
+        message: 'fork is unavailable for this session',
+        details: { sessionId: sourceId },
+      },
+    })
+    expect(agent.session.events).toEqual(beforeEvents)
+    expect(ctx.sessions.list().map(session => session.id)).toEqual(beforeSessions)
+    await ctx.fiber.dispose()
+  })
+
   it('cuts at the anchored completed turn and records lineage and cwd', async () => {
     const ctx = await composed()
     const source = liveAgent(ctx, 'session-source', 2)

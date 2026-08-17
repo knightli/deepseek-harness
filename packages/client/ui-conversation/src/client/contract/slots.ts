@@ -11,7 +11,7 @@ import type {
   TurnLocation, WorkspaceId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MessageId } from '@deepseek-ai/dsh-client-connection/client'
+import type { MessageId, SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ComposerBlock } from '../input/blocks.ts'
 import type {
@@ -360,7 +360,7 @@ export interface ChatNodeOwnerProps {
   cwd?: string | undefined
   openFile: (path: string) => void
   inspectCall: (callId: CallId) => void
-  forkAt: (seq: number) => void
+  forkAt?: ((seq: number) => void) | undefined
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
@@ -491,6 +491,8 @@ export interface ComposerBarOwnerProps {
 
 /** Injected share of the composer-bar entry (package-internal faces). */
 export interface ComposerBarInjected {
+  /** Read authoritative operation admission for the current session. */
+  loadSessionCapabilities: (sessionId: SessionId) => Promise<SessionCapabilities>
   /** The InputBar-exclusive keyboard/DOM command face (private plane); absent with the session. */
   keyboard: ComposerKeyboard | undefined
   /** Create previews and append image ids to the session input. */
@@ -673,6 +675,8 @@ export interface ChatScrollPosition {
  * outside the view (layout orchestration; the session object layer).
  */
 export interface ChatViewInjected {
+  /** Read authoritative operation admission for the current session. */
+  loadSessionCapabilities: (sessionId: SessionId) => Promise<SessionCapabilities>
   /** Selection write + details panel opening in one gesture (store action + layout orchestration). */
   openDetails: (target: SelectionTarget) => void
   /**
