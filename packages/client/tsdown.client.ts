@@ -10,7 +10,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, dirname, relative, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
@@ -65,6 +65,26 @@ const RUNTIME_STORE_EXEMPTION = '@deepseek-ai/dsh-client-runtime/client'
 export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES, RUNTIME_STORE_EXEMPTION]
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
+/**
+ * Produce the stable repository-relative filename that Lightning CSS includes
+ * in CSS Module identity hashes.
+ * @param repositoryRoot - Absolute checkout root containing the stylesheet.
+ * @param fileId - Absolute stylesheet path resolved for reading and watching.
+ * @returns A POSIX repository-relative path independent of checkout location.
+ */
+export function repositoryCssModuleFilename(repositoryRoot: string, fileId: string): string {
+  const repositoryPath = relative(repositoryRoot, fileId)
+  if (
+    repositoryPath.length === 0
+    || repositoryPath === '..'
+    || repositoryPath.startsWith(`..${sep}`)
+    || isAbsolute(repositoryPath)
+  ) {
+    throw new Error('CSS Module stylesheet is outside the repository root')
+  }
+  return repositoryPath.split(sep).join('/')
+}
 
 /** Rebase a physical lib-relative source onto a browser URL that mirrors the repository directories. */
 function browserSourcePath(source: string, sourcemapPath: string): string {
@@ -233,11 +253,12 @@ function clientConfig(id: string, entry: string): UserConfig {
       async load(virtualId: string) {
         if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
         const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+        const filename = repositoryCssModuleFilename(REPOSITORY_ROOT, fileId)
         // The virtual id otherwise hides the physical stylesheet from Rolldown's watch graph.
         this.addWatchFile(fileId)
         const source = await readFile(fileId)
         const { code, exports: cssExports } = transform({
-          filename: fileId,
+          filename,
           code: source,
           cssModules: { pattern: '[hash]_[local]' },
           minify: true,
