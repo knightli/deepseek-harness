@@ -8,7 +8,7 @@ import { mkdir, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentSetup, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -29,7 +29,7 @@ import {
 } from '@deepseek-ai/dsh-workspace'
 // Type-only: brings the `ctx.tools` Context merge into this program (viewFor reads presenters).
 import {
-  InvalidPresetIdError, PresetExistsError, PresetMountError,
+  InvalidPresetIdError, PresetExistsError, PresetGenerationRevokedError, PresetMountError,
   PresetNotWritableError, resolveSessionPreset,
   SETTINGS_NAMESPACE as AGENT_PRESET_SETTINGS_NAMESPACE, UnknownPresetError,
 } from '@deepseek-ai/dsh-agent-presets'
@@ -406,6 +406,9 @@ function presetFailure(request: RpcRequest<unknown>, error: unknown): RpcRespons
       message: error.message,
       details: { agentPreset: error.presetId, reason: error.reason },
     })
+  }
+  if (error instanceof PresetGenerationRevokedError) {
+    return err(request, noRoster(error.presetId))
   }
   return undefined
 }
@@ -1126,8 +1129,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
    * not enforcement: the wire is reachable directly.
    */
   const presetSwitches = new Map<SessionId, Promise<unknown>>()
-  /** Client-chosen identity creation/resume, deduplicated across concurrent retries. */
-  const sessionCreations = new Map<SessionId, Promise<Agent>>()
+  /** One identity's in-flight owner and the complete caller-local admission tuple it owns. */
+  type SessionCreation = {
+    readonly cwd: string
+    readonly presetId: string | undefined
+    readonly promise: Promise<Agent>
+  }
+  /** Client-chosen identity creation/resume, deduplicated across matching concurrent retries. */
+  const sessionCreations = new Map<SessionId, SessionCreation>()
   /** Serializes path ownership and explicit title checks with Workspace mutations. */
   let workspaceCreationChain = Promise.resolve()
   const pendingQuestions = new Map<RpcId, PendingQuestion>()
@@ -1236,7 +1245,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     presets: AgentPresets | undefined = ctx.get('agentPresets'),
   ): Promise<{
     agentPreset?: string
-    setup: (agentCtx: Context) => Promise<void>
+    setup: AgentSetup
   }> {
     if (presets === undefined) {
       return {
@@ -1251,7 +1260,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       agentPreset: resolvedId,
       setup: async (agentCtx: Context) => {
         installSelection(agentCtx)
-        await presets.mount(agentCtx, resolvedId)
+        return await presets.mountForPublication(agentCtx, resolvedId)
       },
     }
   }
@@ -1650,7 +1659,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   ): Promise<Agent> {
     let creation = sessionCreations.get(sessionId)
     if (creation === undefined) {
-      creation = (async () => {
+      const operation = (async () => {
         const attached = ctx.sessions.get(sessionId)
         const live = ctx.agents.get(sessionId)
         if (attached !== undefined && hasSubagentOwner(attached, live)) {
@@ -1728,30 +1737,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           throw new SubagentSessionOwnership(sessionId)
         }
         throw error
-      }).finally(() => {
-        sessionCreations.delete(sessionId)
       })
+      const promise = operation.finally(() => {
+        // A retry may already own a newer generation when an older operation
+        // settles. Only its exact owner may clear the single-flight slot.
+        if (sessionCreations.get(sessionId)?.promise === promise) sessionCreations.delete(sessionId)
+      })
+      creation = { cwd, presetId, promise }
       sessionCreations.set(sessionId, creation)
     }
     let agent: Agent
     try {
-      agent = await creation
+      agent = await creation.promise
     } catch (error: unknown) {
-      // A caller may have joined a request whose request-specific admission
-      // failed inside the shared persisted-identity operation. After `finally`
-      // clears the single-flight entry, retry when this caller did not make the
-      // same request: omitted adoption remains ordinary, and a differently
-      // named caller receives conflict details for its own preset.
-      if (error instanceof AgentPresetRosterUnavailable && presetId === undefined) {
-        return ensureSession(sessionId, cwd, checkPersistedIdentity)
-      }
-      if (
-        error instanceof AgentPresetConflict
-        && (presetId === undefined || presetId !== error.requestedPreset)
-      ) {
-        return ensureSession(sessionId, cwd, checkPersistedIdentity, presetId)
-      }
-      if (error instanceof SessionCwdConflict && cwd !== error.requestedCwd) {
+      // A failure belongs to the owner tuple that reached the persisted/live
+      // admission boundary. A waiter with any different cwd/preset tuple must
+      // run its own ordered admission after the owner clears the slot; sharing
+      // the owner's typed rejection would misclassify the waiter's request.
+      if (creation.cwd !== cwd || creation.presetId !== presetId) {
         return ensureSession(sessionId, cwd, checkPersistedIdentity, presetId)
       }
       throw error
@@ -1760,10 +1763,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     // Beside the cwd check for the same reason, and after the await so it
     // covers every path that yields a live agent — freshly created, adopted
     // live, resumed from disk, or recovered by the concurrent-creation catch.
-    assertPresetUnchanged(sessionId, presetId, resolveSessionPreset(agent.session))
     if (agent.session.header.cwd !== cwd) {
       throw new SessionCwdConflict(sessionId, cwd, agent.session.header.cwd)
     }
+    assertPresetUnchanged(sessionId, presetId, resolveSessionPreset(agent.session))
     return agent
   }
 

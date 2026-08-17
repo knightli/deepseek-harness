@@ -44,6 +44,7 @@ function roster(
   userIds: readonly string[] = [],
   onResolve?: () => void,
 ): unknown {
+  const composed = new WeakMap<Context, string>()
   const trustOf = (id: string): 'system' | 'user' => (userIds.includes(id) ? 'user' : 'system')
   const presetOf = (id: string): object =>
     ({ id, trust: trustOf(id), path: `/presets/${id}/agent.cordis.yml` })
@@ -56,7 +57,17 @@ function roster(
       if (!ids.includes(wanted)) return Promise.reject(new UnknownPresetError(wanted, ids))
       return Promise.resolve(presetOf(wanted))
     },
-    mount: (_ctx: Context, id?: string) => Promise.resolve(presetOf(id ?? ids[0] ?? '')),
+    mount: (agentCtx: Context, id?: string) => {
+      const resolved = id ?? ids[0] ?? ''
+      composed.set(agentCtx, resolved)
+      return Promise.resolve(presetOf(resolved))
+    },
+    mountForPublication: (agentCtx: Context, id?: string) => {
+      const resolved = id ?? ids[0] ?? ''
+      composed.set(agentCtx, resolved)
+      return Promise.resolve({ presetId: resolved, commit: () => {} })
+    },
+    composedPreset: (agentCtx: Context) => composed.get(agentCtx),
     // What a real mount leaves behind: a service instance only the agent that
     // mounted it can be used to address. The doubles are per agent so a test
     // can tell "this session's" from "some session's".
@@ -139,7 +150,8 @@ async function harness(
       // gateway's own `installTarget` relies on.
       const agentCtx = ctx.extend({ agent })
       ;(agent as { ctx?: Context }).ctx = agentCtx
-      await options.setup?.(agentCtx)
+      const setupCommit = await options.setup?.(agentCtx)
+      setupCommit?.commit()
       const unregister = ctx.agents.register(agent)
       return { agent, dispose: () => { unregister(); return Promise.resolve() } }
     },
@@ -153,7 +165,8 @@ async function harness(
       const agent = stubAgent(session)
       const agentCtx = ctx.extend({ agent })
       ;(agent as { ctx?: Context }).ctx = agentCtx
-      await resumeOptions.setup?.(agentCtx)
+      const setupCommit = await resumeOptions.setup?.(agentCtx)
+      setupCommit?.commit()
       const unregister = ctx.agents.register(agent)
       return { agent, dispose: () => { unregister(); return Promise.resolve() } }
     },
@@ -445,6 +458,91 @@ describe('session.create with an agent preset', () => {
       },
     })
     expect(correct.result).toMatchObject({ ok: true, value: { sessionId } })
+  })
+
+  it('rechecks cwd before composition when two failing callers share one persisted identity', async () => {
+    const sessionId = SessionId('persisted-admission-tuple-race')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-persisted-tuple-')))
+    const wrongCwd = join(cwd, 'wrong')
+    const meta = { version: 0 as const, id: sessionId, createdAt: 1, cwd }
+    const events: Session['events'] = []
+    let inspectStarted!: () => void
+    let releaseInspect!: () => void
+    const started = new Promise<void>((resolve) => { inspectStarted = resolve })
+    const release = new Promise<void>((resolve) => { releaseInspect = resolve })
+    const persistence = {
+      list: () => Promise.resolve([meta]),
+      inspect: async () => {
+        inspectStarted()
+        await release
+        return { meta, events }
+      },
+    }
+    const { api } = await harness(['standard'], persistence, {
+      defaults: { cwd },
+      resumeStored: { meta, events },
+    })
+
+    const owner = api.sessions.create(request({ sessionId, agentPreset: 'standard' }))
+    await started
+    const waiter = api.sessions.create(request({
+      sessionId,
+      cwd: wrongCwd,
+      agentPreset: 'standard',
+    }))
+    await Promise.resolve()
+    releaseInspect()
+    const [ownerResponse, waiterResponse] = await Promise.all([owner, waiter])
+
+    expect(ownerResponse.result).toMatchObject({
+      ok: false,
+      error: { code: 'agent-preset-conflict', details: { requestedPreset: 'standard' } },
+    })
+    expect(waiterResponse.result).toMatchObject({
+      ok: false,
+      error: { code: 'session-conflict', details: { requestedCwd: wrongCwd, existingCwd: cwd } },
+    })
+  })
+
+  it('checks a successful shared result in ownership-cwd-composition order', async () => {
+    const sessionId = SessionId('persisted-success-admission-order')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-persisted-order-')))
+    const wrongCwd = join(cwd, 'wrong')
+    const meta = { version: 0 as const, id: sessionId, createdAt: 1, cwd }
+    const events: Session['events'] = []
+    let inspectStarted!: () => void
+    let releaseInspect!: () => void
+    const started = new Promise<void>((resolve) => { inspectStarted = resolve })
+    const release = new Promise<void>((resolve) => { releaseInspect = resolve })
+    const persistence = {
+      list: () => Promise.resolve([meta]),
+      inspect: async () => {
+        inspectStarted()
+        await release
+        return { meta, events }
+      },
+    }
+    const { api } = await harness(['standard'], persistence, {
+      defaults: { cwd },
+      resumeStored: { meta, events },
+    })
+
+    const owner = api.sessions.create(request({ sessionId }))
+    await started
+    const waiter = api.sessions.create(request({
+      sessionId,
+      cwd: wrongCwd,
+      agentPreset: 'standard',
+    }))
+    await Promise.resolve()
+    releaseInspect()
+    const [ownerResponse, waiterResponse] = await Promise.all([owner, waiter])
+
+    expect(ownerResponse.result).toMatchObject({ ok: true, value: { sessionId } })
+    expect(waiterResponse.result).toMatchObject({
+      ok: false,
+      error: { code: 'session-conflict', details: { requestedCwd: wrongCwd, existingCwd: cwd } },
+    })
   })
 
   it('adopts an existing recorded composition after its roster is removed', async () => {

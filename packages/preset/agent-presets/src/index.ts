@@ -22,18 +22,24 @@
  */
 
 import { stat } from 'node:fs/promises'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, FiberState, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { bindScopeParent, createScope, scopeOf, type Scope, type ScopeKey, type ScopeParentBinding } from '@deepseek-ai/dsh-scope'
+import {
+  bindScopeParent, createScope, scopeOf, scopeParentOf,
+  type Scope, type ScopeKey, type ScopeParentBinding,
+} from '@deepseek-ai/dsh-scope'
 // Type-only: resolves the `agent/created` lifecycle event this service watches.
-import type {} from '@deepseek-ai/dsh-agent'
+import type { AgentSetupCommit } from '@deepseek-ai/dsh-agent'
 import { settingsNamespace, type SettingsScope, type default as SettingsService } from '@deepseek-ai/dsh-settings'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { discoverPresets, USER_PRESET_DIR } from './discovery.ts'
 import { copyComposition, deleteComposition, readComposition } from './authoring.ts'
 import { mountPreset, serviceForAgent, standingMountFor } from './mount.ts'
 import { PresetExistsError } from './authoring.ts'
-import { PresetMountError, UnknownPresetError, type AgentPreset, type Config, type PresetRoot } from './preset.ts'
+import {
+  PresetGenerationRevokedError, PresetMountError, UnknownPresetError,
+  type AgentPreset, type Config, type PresetRoot,
+} from './preset.ts'
 import type {} from './types.ts'
 
 /** Settings namespace carrying the user's chosen default preset. */
@@ -43,6 +49,12 @@ export const SETTINGS_NAMESPACE = 'agent-presets'
 export interface AgentPresetSettings {
   /** Preset mounted when a session names none. */
   default?: string
+}
+
+/** Publication receipt for one preset composition prepared on an unpublished Agent. */
+export interface AgentPresetSetupCommit extends AgentSetupCommit {
+  /** Preset whose exact roster generation and standing mount the receipt validates. */
+  readonly presetId: string
 }
 
 /** Runtime schema for the user-writable slice. */
@@ -63,7 +75,7 @@ export {
   PresetNotWritableError, readComposition, writableRoot,
 } from './authoring.ts'
 export { resolveSessionPreset, type PresetBearingSession } from './session.ts'
-export { PresetMountError, UnknownPresetError } from './preset.ts'
+export { PresetGenerationRevokedError, PresetMountError, UnknownPresetError } from './preset.ts'
 export type { AgentPreset, Config, PresetRoot, PresetTrust } from './preset.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -127,9 +139,17 @@ export class AgentPresets extends Service {
    */
   private readonly selfCtx: Context
 
+  /** Per-service generation token, revoked synchronously when this roster unloads. */
+  private readonly generation = { active: true }
+
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'agentPresets')
     this.selfCtx = ctx
+    ctx.effect(() => () => {
+      // First and synchronous: an in-flight publication receipt must fail even
+      // if later async disposers have not finished tearing down standing rows.
+      this.generation.active = false
+    }, 'agentPresets.generation()')
     this.resolvedRoots = config.includeUserRoot
       ? [...config.roots, { path: dshHomePath(USER_PRESET_DIR), trust: 'user' }]
       : [...config.roots]
@@ -259,6 +279,43 @@ export class AgentPresets extends Service {
    */
   private readonly bindings = new WeakMap<ScopeKey, ScopeParentBinding>()
 
+  /** Refuse work and receipts owned by an unloading or superseded roster generation. */
+  private assertGenerationActive(presetId: string): void {
+    if (!this.generation.active || this.selfCtx.fiber.state !== FiberState.ACTIVE) {
+      throw new PresetGenerationRevokedError(presetId)
+    }
+  }
+
+  /** Prepare the exact standing mount and binding one publication receipt validates. */
+  private async prepareMount(agentCtx: Context, id?: string): Promise<{
+    preset: AgentPreset
+    standing: StandingMount
+    mounted: NonNullable<ReturnType<typeof standingMountFor>>
+    agentKey: ScopeKey
+    binding: ScopeParentBinding
+  }> {
+    const requestedId = id ?? this.defaultId
+    this.assertGenerationActive(requestedId)
+    const agentKey = scopeOf(agentCtx)
+    if (agentKey === undefined) {
+      throw new Error('agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset')
+    }
+    const preset = await this.resolveMountable(id)
+    this.assertGenerationActive(preset.id)
+    const standing = await this.ensureStanding(preset)
+    this.assertGenerationActive(preset.id)
+    if (standing.scope.ctx.fiber.state !== FiberState.ACTIVE) {
+      throw new PresetGenerationRevokedError(preset.id)
+    }
+    const binding = bindScopeParent(agentKey, standing.key)
+    this.bindings.set(agentKey, binding)
+    const mounted = standingMountFor(agentCtx)
+    if (mounted === undefined || mounted.key !== standing.key || mounted.presetId !== preset.id) {
+      throw new PresetGenerationRevokedError(preset.id)
+    }
+    return { preset, standing, mounted, agentKey, binding }
+  }
+
   /**
    * Compose one agent from a preset: ensure the preset's standing mount, then
    * parent the agent's scope key to it so the mount's registrations and
@@ -273,18 +330,43 @@ export class AgentPresets extends Service {
    * @throws when the preset is unknown or its composition is unusable.
    */
   async mount(agentCtx: Context, id?: string): Promise<AgentPreset> {
-    const agentKey = scopeOf(agentCtx)
-    if (agentKey === undefined) {
-      throw new Error('agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset')
+    return (await this.prepareMount(agentCtx, id)).preset
+  }
+
+  /**
+   * Compose an unpublished Agent and return its exact publication receipt.
+   *
+   * The caller must return this receipt from `AgentSetup`. Its synchronous
+   * `commit()` validates the roster generation, standing scope/root fibers,
+   * and exact binding after every setup await has settled and immediately
+   * before publication. It does not promise that every row survives roster HMR.
+   * @param agentCtx - the unpublished Agent's scoped setup context.
+   * @param id - preset id, or `undefined` for {@link defaultId}.
+   * @returns the receipt the Agent factory must commit.
+   */
+  async mountForPublication(agentCtx: Context, id?: string): Promise<AgentPresetSetupCommit> {
+    const prepared = await this.prepareMount(agentCtx, id)
+    const { preset, standing, mounted, agentKey, binding } = prepared
+    return {
+      presetId: preset.id,
+      commit: () => {
+        this.assertGenerationActive(preset.id)
+        const current = standingMountFor(agentCtx)
+        if (
+          standing.scope.ctx.fiber.state !== FiberState.ACTIVE
+          || mounted.fiber.state !== FiberState.ACTIVE
+          || mounted.fiber.uid === null
+          || scopeOf(agentCtx) !== agentKey
+          || this.bindings.get(agentKey) !== binding
+          || scopeParentOf(agentKey) !== standing.key
+          || current?.key !== standing.key
+          || current.fiber !== mounted.fiber
+          || current.presetId !== preset.id
+        ) {
+          throw new PresetGenerationRevokedError(preset.id)
+        }
+      },
     }
-    const preset = await this.resolveMountable(id)
-    const standing = await this.ensureStanding(preset)
-    // The one bind of this agent's ancestry. The binding is the only re-link
-    // authority, held privately so nothing outside this roster can move a
-    // composed agent to another preset; a later recompose layer re-links
-    // through it under the caller-owned blank-session contract.
-    this.bindings.set(agentKey, bindScopeParent(agentKey, standing.key))
-    return preset
   }
 
   /**

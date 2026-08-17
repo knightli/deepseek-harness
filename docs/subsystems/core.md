@@ -428,6 +428,19 @@ async resolve(id?: string): Promise<AgentPreset>
 async mount(agentCtx: Context, id?: string): Promise<AgentPreset>
 
 /**
+ * Compose an unpublished Agent and return its exact publication receipt.
+ *
+ * The caller must return this receipt from `AgentSetup`. Its synchronous
+ * `commit()` validates the roster generation, standing scope/root fibers,
+ * and exact binding after every setup await has settled and immediately
+ * before publication. It does not promise that every row survives roster HMR.
+ * @param agentCtx - the unpublished Agent's scoped setup context.
+ * @param id - preset id, or `undefined` for {@link defaultId}.
+ * @returns the receipt the Agent factory must commit.
+ */
+async mountForPublication(agentCtx: Context, id?: string): Promise<AgentPresetSetupCommit>
+
+/**
  * Join one agent to the SAME standing composition another already runs on.
  *
  * This is how a child agent inherits its parent's capabilities. It is a bind,
@@ -554,7 +567,7 @@ async standingKeyFor(id?: string): Promise<ScopeKey>
 
 Types: [ScopeKey](scope.md)
 
-Source: [`packages/preset/agent-presets/src/index.ts:82`](../../packages/preset/agent-presets/src/index.ts)
+Source: [`packages/preset/agent-presets/src/index.ts:94`](../../packages/preset/agent-presets/src/index.ts)
 
 <a id="ctxagents--agentregistry"></a>
 

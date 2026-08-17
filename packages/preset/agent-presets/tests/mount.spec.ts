@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, type Fiber } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
@@ -13,7 +13,8 @@ import AgentRegistry, { assembleContextFor, type Agent } from '@deepseek-ai/dsh-
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentPresets, {
-  COMPOSITION_FILE, leakedServices, livePresetMounts, mountPreset, PresetMountError, serviceForAgent,
+  COMPOSITION_FILE, leakedServices, livePresetMounts, mountPreset, PresetGenerationRevokedError,
+  PresetMountError, serviceForAgent,
 } from '@deepseek-ai/dsh-agent-presets'
 import type { Config } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
@@ -38,7 +39,10 @@ const ROOTS = [
  * @param roster - roster config, defaulting to the fixture roots.
  * @returns the booted context.
  */
-async function harness(roster: Config = { default: 'standard', roots: ROOTS, includeUserRoot: false }): Promise<Context> {
+async function harness(
+  roster: Config = { default: 'standard', roots: ROOTS, includeUserRoot: false },
+  captureRosterFiber?: (fiber: Fiber) => void,
+): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
@@ -49,7 +53,9 @@ async function harness(roster: Config = { default: 'standard', roots: ROOTS, inc
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(AgentPresets, roster)
+  const rosterFiber = ctx.plugin(AgentPresets, roster)
+  await rosterFiber
+  captureRosterFiber?.(rosterFiber)
   return ctx
 }
 
@@ -136,6 +142,59 @@ describe('composing an agent from a preset', () => {
 
     expect(toolNames(ctx, first)).toEqual(['alpha'])
     expect(toolNames(ctx, second)).toEqual(['alpha'])
+  })
+
+  it('revokes an unpublished receipt when its roster unloads after setup', async () => {
+    let rosterFiber!: Fiber
+    const scoped = await harness(undefined, (fiber) => { rosterFiber = fiber })
+    await agentOn(scoped, 'sess-publication-seed', 'standard')
+    const setupReady = Promise.withResolvers<undefined>()
+    const releaseSetup = Promise.withResolvers<undefined>()
+    const published: string[] = []
+    scoped.on('session/created', session => void published.push(`session:${session.id}`))
+    scoped.on('agent/created', ({ agent }) => void published.push(`agent:${agent.id}`))
+    scoped.on('agent/session-start', ({ agent }) => void published.push(`start:${agent.id}`))
+
+    const creating = scoped.agents.create({
+      sessionId: SessionId('sess-revoked-publication'),
+      setup: async (agentCtx: Context) => {
+        const receipt = await scoped.agentPresets.mountForPublication(agentCtx, 'standard')
+        setupReady.resolve(undefined)
+        await releaseSetup.promise
+        return receipt
+      },
+    })
+    await setupReady.promise
+    await rosterFiber.dispose()
+    releaseSetup.resolve(undefined)
+
+    await expect(creating).rejects.toBeInstanceOf(PresetGenerationRevokedError)
+    expect(scoped.sessions.get(SessionId('sess-revoked-publication'))).toBeUndefined()
+    expect(scoped.agents.get(SessionId('sess-revoked-publication'))).toBeUndefined()
+    expect(published.filter(event => event.endsWith('sess-revoked-publication'))).toEqual([])
+  })
+
+  it('keeps an old receipt revoked after the same roster fiber restarts', async () => {
+    let rosterFiber!: Fiber
+    const scoped = await harness(undefined, (fiber) => { rosterFiber = fiber })
+    const setupReady = Promise.withResolvers<undefined>()
+    const releaseSetup = Promise.withResolvers<undefined>()
+    const creating = scoped.agents.create({
+      sessionId: SessionId('sess-revoked-restart'),
+      setup: async (agentCtx: Context) => {
+        const receipt = await scoped.agentPresets.mountForPublication(agentCtx, 'standard')
+        setupReady.resolve(undefined)
+        await releaseSetup.promise
+        return receipt
+      },
+    })
+    await setupReady.promise
+    await rosterFiber.restart()
+    releaseSetup.resolve(undefined)
+
+    await expect(creating).rejects.toBeInstanceOf(PresetGenerationRevokedError)
+    expect(scoped.sessions.get(SessionId('sess-revoked-restart'))).toBeUndefined()
+    expect(scoped.agents.get(SessionId('sess-revoked-restart'))).toBeUndefined()
   })
 
   it('unwinds one session\'s composition without touching another\'s', async () => {

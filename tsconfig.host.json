@@ -13,6 +13,7 @@
     "apps/web/tests/fixtures/external-text-agent.ts",
     "apps/web/tests/external-text-agent.e2e.ts",
     "apps/web/tests/no-roster-preset-admission.e2e.ts",
+    "apps/web/tests/agent-preset-roster-lifecycle.e2e.ts",
     "apps/web/tests/default-model.e2e.ts",
     "apps/web/tests/declared-reasoning.e2e.ts",
     "apps/web/tests/support.ts",

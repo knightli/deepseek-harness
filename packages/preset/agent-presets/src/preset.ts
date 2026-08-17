@@ -91,3 +91,13 @@ export class PresetMountError extends Error {
     super(`agent-presets: preset "${presetId}" failed to mount: ${reason}`, options)
   }
 }
+
+/** A preset was prepared by a roster generation that cannot publish anymore. */
+export class PresetGenerationRevokedError extends Error {
+  constructor(
+    /** The preset whose prepared composition lost its owning roster generation. */
+    readonly presetId: string,
+  ) {
+    super(`agent-presets: preset "${presetId}" cannot publish because its roster generation was revoked`)
+  }
+}

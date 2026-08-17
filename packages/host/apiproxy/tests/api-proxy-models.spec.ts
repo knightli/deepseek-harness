@@ -484,7 +484,7 @@ describe('Web session model selection', () => {
 
   it('admits a text prompt through an external-text Agent without an LLM route', async () => {
     const { ctx, agent, sessionId } = await harness()
-    const followup = vi.fn()
+    const followup = vi.fn<(message: UserMessage) => void>()
     Object.assign(agent, {
       promptExecution: { kind: 'external-text' },
       followup,
@@ -505,8 +505,11 @@ describe('Web session model selection', () => {
       value: { accepted: true },
     })
     expect(followup).toHaveBeenCalledOnce()
-    expect(followup.mock.calls[0]?.[0]).toEqual({
-      id: expect.any(String),
+    const followed = followup.mock.calls[0]?.[0]
+    if (followed === undefined) throw new Error('expected one external-text follow-up')
+    expect(typeof followed.id).toBe('string')
+    expect(followed).toEqual({
+      id: followed.id,
       role: 'user',
       source: { kind: 'user', rpcId: promptRequest.rpcId },
       content: [{ type: 'text', text: 'external work' }],
@@ -516,8 +519,8 @@ describe('Web session model selection', () => {
 
   it('steers an external-text Agent without an LLM route', async () => {
     const { ctx, agent, sessionId } = await harness()
-    const followup = vi.fn()
-    const steer = vi.fn()
+    const followup = vi.fn<(message: UserMessage) => void>()
+    const steer = vi.fn<(message: UserMessage) => void>()
     Object.assign(agent, {
       promptExecution: { kind: 'external-text' },
       followup,
@@ -538,8 +541,11 @@ describe('Web session model selection', () => {
       value: { accepted: true },
     })
     expect(steer).toHaveBeenCalledOnce()
-    expect(steer.mock.calls[0]?.[0]).toEqual({
-      id: expect.any(String),
+    const steered = steer.mock.calls[0]?.[0]
+    if (steered === undefined) throw new Error('expected one external-text steer')
+    expect(typeof steered.id).toBe('string')
+    expect(steered).toEqual({
+      id: steered.id,
       role: 'user',
       source: { kind: 'user', rpcId: promptRequest.rpcId },
       content: [{ type: 'text', text: 'steer external work' }],
