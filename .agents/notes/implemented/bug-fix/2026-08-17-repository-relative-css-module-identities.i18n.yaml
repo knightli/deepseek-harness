@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-17-repository-relative-css-module-identities.md
-2026-08-17-repository-relative-css-module-identities.md: e539dfd82e25d4b782a8916c5aed31ac326a5ab8
-2026-08-17-repository-relative-css-module-identities.zh.md: 4cc877137dcb2d922e06164680331aa4b211a43e
+2026-08-17-repository-relative-css-module-identities.md: 1ff291cd69c342cb07c596a1e528e3ca0e57e8d9
+2026-08-17-repository-relative-css-module-identities.zh.md: f11d2431a69f98fed7ff0c0725695669a2327a5b

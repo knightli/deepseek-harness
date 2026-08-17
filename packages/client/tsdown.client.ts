@@ -10,7 +10,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, isAbsolute, posix, relative, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
@@ -74,6 +74,9 @@ const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url))
  * @returns A POSIX repository-relative path independent of checkout location.
  */
 export function repositoryCssModuleFilename(repositoryRoot: string, fileId: string): string {
+  if (!isAbsolute(repositoryRoot) || !isAbsolute(fileId)) {
+    throw new Error('CSS Module repository root and stylesheet must be absolute paths')
+  }
   const repositoryPath = relative(repositoryRoot, fileId)
   if (
     repositoryPath.length === 0
@@ -84,6 +87,111 @@ export function repositoryCssModuleFilename(repositoryRoot: string, fileId: stri
     throw new Error('CSS Module stylesheet is outside the repository root')
   }
   return repositoryPath.split(sep).join('/')
+}
+
+/**
+ * Encode a physical stylesheet as a checkout-independent Rolldown module id.
+ * @param repositoryRoot - Absolute checkout root containing the stylesheet.
+ * @param fileId - Absolute stylesheet path resolved by the importing module.
+ * @returns A virtual id containing only the canonical repository-relative path.
+ */
+export function repositoryCssModuleVirtualId(repositoryRoot: string, fileId: string): string {
+  return `${CSS_VIRTUAL_PREFIX}${repositoryCssModuleFilename(repositoryRoot, fileId)}${CSS_VIRTUAL_SUFFIX}`
+}
+
+/**
+ * Restore a physical stylesheet path from a canonical CSS virtual module id.
+ * @param repositoryRoot - Absolute checkout root used for physical file access.
+ * @param virtualId - Checkout-independent virtual id emitted by the resolver.
+ * @returns The validated absolute stylesheet path used only for read/watch I/O.
+ */
+export function repositoryCssModuleFileId(repositoryRoot: string, virtualId: string): string {
+  if (!isAbsolute(repositoryRoot)
+    || !virtualId.startsWith(CSS_VIRTUAL_PREFIX)
+    || !virtualId.endsWith(CSS_VIRTUAL_SUFFIX)) {
+    throw new Error('Invalid CSS Module virtual id')
+  }
+  const repositoryPath = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+  if (repositoryPath.length === 0
+    || !repositoryPath.endsWith('.module.css')
+    || repositoryPath === '..'
+    || repositoryPath.startsWith('../')
+    || repositoryPath.includes('\\')
+    || repositoryPath.includes(':')
+    || repositoryPath.includes('\0')
+    || posix.isAbsolute(repositoryPath)
+    || posix.normalize(repositoryPath) !== repositoryPath) {
+    throw new Error('Invalid CSS Module virtual id')
+  }
+  const fileId = resolvePath(repositoryRoot, ...repositoryPath.split('/'))
+  if (repositoryCssModuleFilename(repositoryRoot, fileId) !== repositoryPath) {
+    throw new Error('Invalid CSS Module virtual id')
+  }
+  return fileId
+}
+
+/**
+ * Normalize Lightning CSS export insertion order before serializing module JS.
+ * @param cssExports - Class-name exports produced by Lightning CSS.
+ * @returns A class map whose own keys are inserted in stable code-unit order.
+ */
+export function sortedCssModuleClassMap(
+  cssExports: Readonly<Record<string, { readonly name: string }>> | undefined | void,
+): Record<string, string> {
+  const classMap: Record<string, string> = {}
+  const entries = Object.entries(cssExports ?? {})
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+  for (const [local, exp] of entries) classMap[local] = exp.name
+  return classMap
+}
+
+/**
+ * Compile CSS Modules into inline client modules without leaking checkout paths.
+ * @param id - Client package id used to own injected style elements.
+ * @param repositoryRoot - Absolute checkout root for resolving physical files.
+ * @returns A Rolldown plugin with canonical virtual identities and absolute I/O.
+ */
+export function cssModulesInlinePlugin(id: string, repositoryRoot: string) {
+  return {
+    name: 'dsh-css-modules-inline',
+    resolveId(source: string, importer: string | undefined) {
+      if (!source.endsWith('.module.css')) return null
+      const fileId = isAbsolute(source)
+        ? source
+        : importer !== undefined
+          ? sourceAssetPath(source, importer)
+          : resolvePath(source)
+      return repositoryCssModuleVirtualId(repositoryRoot, fileId)
+    },
+    async load(this: { addWatchFile(fileId: string): void }, virtualId: string) {
+      if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
+      const fileId = repositoryCssModuleFileId(repositoryRoot, virtualId)
+      const filename = repositoryCssModuleFilename(repositoryRoot, fileId)
+      // The virtual id otherwise hides the physical stylesheet from Rolldown's watch graph.
+      this.addWatchFile(fileId)
+      const source = await readFile(fileId)
+      const { code, exports: cssExports } = transform({
+        filename,
+        code: source,
+        cssModules: { pattern: '[hash]_[local]' },
+        minify: true,
+      })
+      const classMap = sortedCssModuleClassMap(cssExports)
+      // One <style data-plugin> per module file; idempotent under re-evaluation.
+      return [
+        `const css = ${JSON.stringify(code.toString())};`,
+        `const tagId = ${JSON.stringify(`${id}/${basename(fileId)}`)};`,
+        'if (typeof document !== \'undefined\' && document.querySelector(\'style[data-plugin-css=\' + JSON.stringify(tagId) + \']\') === null) {',
+        '  const tag = document.createElement(\'style\');',
+        `  tag.dataset.plugin = ${JSON.stringify(id)};`,
+        '  tag.dataset.pluginCss = tagId;',
+        '  tag.textContent = css;',
+        '  document.head.appendChild(tag);',
+        '}',
+        `export default ${JSON.stringify(classMap)};`,
+      ].join('\n')
+    },
+  }
 }
 
 /** Rebase a physical lib-relative source onto a browser URL that mirrors the repository directories. */
@@ -243,43 +351,7 @@ function clientConfig(id: string, entry: string): UserConfig {
           + 'cross-plugin value imports are forbidden; collaborate through cordis services (type-only imports are erased and never reach this gate)',
         )
       },
-    }, {
-      name: 'dsh-css-modules-inline',
-      resolveId(source: string, importer: string | undefined) {
-        if (!source.endsWith('.module.css')) return null
-        const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
-        return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
-      },
-      async load(virtualId: string) {
-        if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-        const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
-        const filename = repositoryCssModuleFilename(REPOSITORY_ROOT, fileId)
-        // The virtual id otherwise hides the physical stylesheet from Rolldown's watch graph.
-        this.addWatchFile(fileId)
-        const source = await readFile(fileId)
-        const { code, exports: cssExports } = transform({
-          filename,
-          code: source,
-          cssModules: { pattern: '[hash]_[local]' },
-          minify: true,
-        })
-        const classMap: Record<string, string> = {}
-        for (const [local, exp] of Object.entries(cssExports ?? {})) classMap[local] = exp.name
-        // One <style data-plugin> per module file; idempotent under re-evaluation.
-        return [
-          `const css = ${JSON.stringify(code.toString())};`,
-          `const tagId = ${JSON.stringify(`${id}/${basename(fileId)}`)};`,
-          'if (typeof document !== \'undefined\' && document.querySelector(\'style[data-plugin-css=\' + JSON.stringify(tagId) + \']\') === null) {',
-          '  const tag = document.createElement(\'style\');',
-          `  tag.dataset.plugin = ${JSON.stringify(id)};`,
-          '  tag.dataset.pluginCss = tagId;',
-          '  tag.textContent = css;',
-          '  document.head.appendChild(tag);',
-          '}',
-          `export default ${JSON.stringify(classMap)};`,
-        ].join('\n')
-      },
-    }],
+    }, cssModulesInlinePlugin(id, REPOSITORY_ROOT)],
     outputOptions: {
       entryFileNames: 'client.js',
       // The map is served from /plugins/<scoped-package>/client.js.map. The
