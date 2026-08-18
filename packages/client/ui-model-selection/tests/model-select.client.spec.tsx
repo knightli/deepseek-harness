@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
+import { conversationSnapshot } from '@deepseek-ai/dsh-client-test-runtime'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ComponentProps } from 'react'
+import type { ConversationSnapshot, SessionId, UseConversationSession } from '@deepseek-ai/dsh-client-runtime/client'
+import { useSyncExternalStore, type ComponentProps } from 'react'
 import type { ModelDirectoryState } from '../src/client/directory.ts'
 import { ModelSelect } from '../src/client/ModelSelect.tsx'
 import { zh } from '../src/client/locales.ts'
@@ -19,6 +21,21 @@ const t: ComponentProps<typeof ModelSelect>['t'] = (key, params) => {
     ? template
     : template.replace(/\{(\w+)\}/g, (match, name: string) => name in params ? String(params[name]) : match)
 }
+
+const ordinarySnapshot = conversationSnapshot('s1' as SessionId)
+const addressedSnapshot: ConversationSnapshot = {
+  ...ordinarySnapshot,
+  subagent: {
+    address: {
+      parentSessionId: 'parent' as SessionId,
+      childSessionId: 's1' as SessionId,
+      mode: 'continuable',
+    },
+    parentAvailable: true,
+  },
+}
+const useOrdinarySession: UseConversationSession = selector => selector(ordinarySnapshot)
+const useAddressedSession: UseConversationSession = selector => selector(addressedSnapshot)
 
 const reasoning = {
   efforts: [
@@ -57,7 +74,7 @@ describe('ModelSelect reasoning effort', () => {
     })
     render(<ModelSelect
       locked={false}
-      available
+      useSession={useOrdinarySession}
       directory={directory}
       load={vi.fn()}
       select={select}
@@ -98,7 +115,7 @@ describe('ModelSelect reasoning effort', () => {
     }))
     render(<ModelSelect
       locked={false}
-      available
+      useSession={useOrdinarySession}
       directory={directory}
       load={vi.fn()}
       select={vi.fn().mockResolvedValue(true)}
@@ -120,7 +137,7 @@ describe('ModelSelect reasoning effort', () => {
     const select = vi.fn().mockResolvedValue(true)
     render(<ModelSelect
       locked={false}
-      available
+      useSession={useOrdinarySession}
       directory={directory}
       load={vi.fn()}
       select={select}
@@ -152,7 +169,7 @@ describe('ModelSelect reasoning effort', () => {
     })
     render(<ModelSelect
       locked={false}
-      available
+      useSession={useOrdinarySession}
       directory={directory}
       load={vi.fn()}
       select={select}
@@ -172,7 +189,7 @@ describe('ModelSelect reasoning effort', () => {
     const load = vi.fn()
     render(<ModelSelect
       locked={false}
-      available={false}
+      useSession={useAddressedSession}
       directory={createSnapshotStore(state())}
       load={load}
       select={vi.fn().mockResolvedValue(false)}
@@ -181,5 +198,43 @@ describe('ModelSelect reasoning effort', () => {
 
     expect(screen.queryByRole('button')).toBeNull()
     expect(load).not.toHaveBeenCalled()
+  })
+
+  it('tracks ordinary and addressed transitions through the standing session hook', () => {
+    const session = createSnapshotStore<ConversationSnapshot>(conversationSnapshot('s1' as SessionId))
+    const useSession: UseConversationSession = selector => useSyncExternalStore(
+      listener => session.subscribe(listener),
+      () => selector(session.getSnapshot()),
+    )
+    const load = vi.fn()
+    render(<ModelSelect
+      locked={false}
+      useSession={useSession}
+      directory={createSnapshotStore(state())}
+      load={load}
+      select={vi.fn().mockResolvedValue(true)}
+      t={t}
+    />)
+    expect(screen.getByRole('button')).toBeTruthy()
+    expect(load).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      session.update((draft) => {
+        draft.subagent = {
+          address: {
+            parentSessionId: 'parent' as SessionId,
+            childSessionId: 's1' as SessionId,
+            mode: 'continuable',
+          },
+          parentAvailable: true,
+        }
+      })
+    })
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(load).toHaveBeenCalledTimes(1)
+
+    act(() => { session.update((draft) => { draft.subagent = null }) })
+    expect(screen.getByRole('button')).toBeTruthy()
+    expect(load).toHaveBeenCalledTimes(2)
   })
 })

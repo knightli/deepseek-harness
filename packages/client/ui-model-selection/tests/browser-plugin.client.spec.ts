@@ -132,6 +132,9 @@ async function bench() {
   ctx.provide('sessions', {
     scope: (id: SessionId) => scopes.get(id),
     sessionOf: (scope: Context) => sessionsByScope.get(scope),
+    invalidateModelDirectories: () => {
+      for (const session of sessionsById.values()) session.invalidateModels()
+    },
     subagentAddress: (id: SessionId) => addressed.has(id)
       ? { parentSessionId: sid('parent'), childSessionId: id, mode: 'continuable' as const }
       : undefined,
@@ -281,6 +284,41 @@ describe('ui-model-selection dual entry', () => {
     expect(face2.directory).toBe(face1.directory)
   })
 
+  it('invalidates a resident Session whose UI directory was never materialized', async () => {
+    const b = await bench()
+    b.mint('offscreen')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(b.calls.models).toBe(1)
+    b.setHostCurrent({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+
+    b.ctx.remote.$dispatch('llm/adapters-updated', [])
+    expect(b.calls.models).toBe(1)
+    const models = await b.ctx.modelDirectories.directoryFor(sid('offscreen')).load()
+
+    expect(b.calls.models).toBe(2)
+    expect(models.current).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+  })
+
+  it('invalidates a resident Session after its UI directory facade is disposed', async () => {
+    const b = await bench()
+    const first = b.mint('offscreen')
+    b.seat().inject!(sid('offscreen'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(b.calls.models).toBe(1)
+    await first.fiber.dispose()
+    b.setHostCurrent({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+
+    b.ctx.remote.$dispatch('settings/document-updated', ['llm-deepseek', 1])
+    expect(b.calls.models).toBe(1)
+    b.mint('offscreen')
+    const models = await b.ctx.modelDirectories.directoryFor(sid('offscreen')).load()
+
+    expect(b.calls.models).toBe(2)
+    expect(models.current).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+  })
+
   it('turns an explicit load after an error into a fresh runtime read', async () => {
     const b = await bench()
     b.failNextModels()
@@ -371,7 +409,6 @@ describe('ui-model-selection dual entry', () => {
     )).rejects.toThrow(/unavailable for addressed subagent/)
 
     const face = b.seat().inject!(sid('child'))
-    expect(face.available).toBe(false)
     face.load()
     await expect(face.select({ provider: 'deepseek', model: 'deepseek-v4-pro' })).resolves.toBe(false)
     await expect(b.ctx.modelDirectories.directoryFor(sid('child')).load())

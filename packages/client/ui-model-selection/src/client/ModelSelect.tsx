@@ -17,6 +17,7 @@ import {
 } from 'react'
 import clsx from 'clsx'
 import type { ModelReasoningEffort, ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
+import type { UseConversationSession } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   IconCheckOutline16, IconChevronDownOutline14, IconChevronRightOutline14,
   IconWarningOutline16, Toast,
@@ -43,9 +44,10 @@ interface EffortChoice {
  * @returns the trigger and, while open, the two-level menu.
  */
 export function ModelSelect(
-  { locked, available, directory, load, select, t }:
-  ModelSelectInjected & { locked: boolean } & PropsLocale<'model'>,
+  { locked, useSession, directory, load, select, t }:
+  ModelSelectInjected & { locked: boolean; useSession: UseConversationSession } & PropsLocale<'model'>,
 ) {
+  const available = useSession(snapshot => snapshot.subagent === null)
   const state = useSyncExternalStore(
     fn => directory.subscribe(fn),
     () => directory.getSnapshot(),
@@ -109,10 +111,13 @@ export function ModelSelect(
 
   // Mount-time load resolves the trigger label; every open refreshes.
   useEffect(() => {
-    if (available) {
-      lastActionRef.current = 'load'
-      load()
+    if (!available) {
+      setOpen(false)
+      setPane('root')
+      return
     }
+    lastActionRef.current = 'load'
+    load()
   }, [available, load])
 
   useEffect(() => {

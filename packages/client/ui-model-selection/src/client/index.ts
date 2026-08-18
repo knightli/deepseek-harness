@@ -153,22 +153,15 @@ export function apply(ctx: ClientContext): void {
   // Entry 2: the composer's named model seat over the SAME directory.
   ctx.inject(['slots', 'modelDirectories'], (scope: ClientContext) => {
     const models = scope.modelDirectories
-    const sessions = scope.sessions
     scope.slots.inject('conversation.input.model', () => scope.slots.register({
       name: 'conversation.input.model',
       locale: NS,
       inject: (sessionId): ModelSelectInjected => {
         const directory = models.directoryFor(sessionId)
-        const available = sessions.subagentAddress(sessionId) === undefined
         return {
-          available,
           directory: directory.store,
-          load: () => {
-            if (available) directory.load().catch(() => { /* surfaced on the store */ })
-          },
-          select: (selection: ModelSelection) => available
-            ? directory.select(selection).then(() => true, () => false)
-            : Promise.resolve(false),
+          load: () => { directory.load().catch(() => { /* surfaced on the store */ }) },
+          select: (selection: ModelSelection) => directory.select(selection).then(() => true, () => false),
         }
       },
     }, ModelSelect))

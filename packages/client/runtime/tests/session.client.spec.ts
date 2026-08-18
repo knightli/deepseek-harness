@@ -329,6 +329,76 @@ describe('capability snapshot', () => {
     expect(api.callsOf('session.models')).toHaveLength(1)
   })
 
+  it('retracts the previous model authority synchronously when a refresh starts', async () => {
+    const { api, session } = makeSession()
+    await Promise.resolve()
+    await Promise.resolve()
+    const refresh = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    api.onModels = () => refresh.promise
+    const subscriber = vi.fn()
+    session.subscribe(subscriber)
+
+    const pending = session.refreshModels()
+
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({
+      current: null,
+      routable: null,
+      capabilities: undefined,
+      groups: [],
+      failures: [],
+      status: 'loading',
+    })
+    await Promise.resolve()
+    expect(subscriber).toHaveBeenCalled()
+    refresh.resolve(ok({
+      current: api.defaultModel,
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: false, fork: false },
+      groups: [],
+      failures: [],
+    }))
+    await pending
+  })
+
+  it('keeps the previous model authority withdrawn after a refresh business error', async () => {
+    const { api, session } = makeSession()
+    await Promise.resolve()
+    await Promise.resolve()
+    api.onModels = () => Promise.resolve(err({ code: 'internal', message: 'registry unavailable', details: {} }))
+
+    await session.refreshModels()
+
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({
+      current: null,
+      routable: null,
+      capabilities: undefined,
+      groups: [],
+      failures: [],
+      status: 'error',
+    })
+  })
+
+  it('keeps the previous model authority withdrawn after a refresh transport error', async () => {
+    const { api, session } = makeSession()
+    await Promise.resolve()
+    await Promise.resolve()
+    api.onModels = () => Promise.reject(new Error('transport unavailable'))
+
+    await session.refreshModels()
+
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({
+      current: null,
+      routable: null,
+      capabilities: undefined,
+      groups: [],
+      failures: [],
+      status: 'error',
+    })
+  })
+
   it('never reads ordinary Agent model state for an addressed child', async () => {
     const api = new FakeApiClient()
     const session = new Session(SID, api, fakeRemote(), {

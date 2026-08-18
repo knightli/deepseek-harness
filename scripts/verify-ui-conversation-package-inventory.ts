@@ -113,7 +113,11 @@ export function assertExactPackageInventory(
   throw new Error(`ui-conversation packed inventory mismatch\n${details.join('\n')}`)
 }
 
-/** Resolve OS temp configuration before handing a destination to a package-root child. */
+/**
+ * Resolve OS temp configuration before handing a destination to a package-root child.
+ * @param root - OS or caller-supplied temporary-directory root.
+ * @returns an absolute directory root safe to pass to a package-root child process.
+ */
 export function absolutePackTempRoot(root = tmpdir()): string {
   return resolve(root)
 }

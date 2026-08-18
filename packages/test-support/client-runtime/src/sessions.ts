@@ -467,6 +467,22 @@ export class TestSessions implements ISessions {
     return Promise.resolve()
   }
 
+  /** Retract model-directory fixtures with the same all-resident semantics as production. */
+  invalidateModelDirectories(): void {
+    for (const record of this.records.values()) {
+      record.session.modelDirectory.set({
+        current: null,
+        routable: null,
+        capabilities: undefined,
+        groups: [],
+        failures: [],
+        status: 'idle',
+        error: null,
+      })
+      record.snapshot.update((draft) => { draft.sessionCapabilities = undefined })
+    }
+  }
+
   /** Apply a confirmed preset switch into the fixture list, as production does. */
   noteAgentPreset(sessionId: SessionId, agentPreset: string): void {
     this.list.update((draft) => {

@@ -46,11 +46,13 @@ export class ModelDirectoryResolver extends Service {
   constructor(ctx: Context, config: { blockReason: () => string }) {
     super(ctx, 'modelDirectories')
     this.blockReason = config.blockReason
+    const sessions = ctx.get('sessions') as SessionRuntime
     // Either source can change the directory: registry topology commits and
     // settings documents that carry provider catalogs or default selection.
     const refresh = (): void => {
+      sessions.invalidateModelDirectories()
       for (const directory of this.live.directories.values()) {
-        directory.refresh().catch(() => undefined)
+        directory.load().catch(() => undefined)
       }
     }
     ctx.remote.$on('llm/adapters-updated', refresh)

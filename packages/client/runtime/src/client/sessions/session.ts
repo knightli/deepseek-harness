@@ -322,12 +322,18 @@ export class Session implements SessionFace {
 
   /** Read or join the current ready generation's authoritative SessionModels result. */
   loadModels(): Promise<RpcResult<SessionModels>> {
-    return this.readModels(false)
+    return this.readModels()
   }
 
   /** Explicit owner-event invalidation of the SessionModels authority. */
   refreshModels(): Promise<RpcResult<SessionModels>> {
-    return this.readModels(true)
+    this.invalidateModels()
+    return this.readModels()
+  }
+
+  /** Retract all cached model facts without starting a replacement read. */
+  invalidateModels(): void {
+    this.clearModelDirectory()
   }
 
   /** Select one complete model route and settle the shared directory projection. */
@@ -927,13 +933,12 @@ export class Session implements SessionFace {
     }
   }
 
-  /** Read SessionModels through the one per-generation authority; explicit refresh invalidates it first. */
-  private readModels(refresh: boolean): Promise<RpcResult<SessionModels>> {
+  /** Read SessionModels through the one per-generation authority. */
+  private readModels(): Promise<RpcResult<SessionModels>> {
     if (this.address !== undefined || this.answerableGeneration === null) {
       return Promise.resolve(this.modelUnavailable())
     }
     const generation = this.connectionGeneration
-    if (refresh) this.invalidateModelRequest()
     if (this.modelResultGeneration === generation && this.modelResult !== undefined) {
       return Promise.resolve(this.modelResult)
     }

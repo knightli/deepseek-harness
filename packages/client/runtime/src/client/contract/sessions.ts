@@ -64,6 +64,12 @@ export interface ISessions {
   refreshSubagents(parentSessionId: SessionId): Promise<void>
 
   /**
+   * Retract every resident session's model-directory facts after a Host owner event.
+   * The method never materializes an absent session or starts replacement reads.
+   */
+  invalidateModelDirectories(): void
+
+  /**
    * Record the composition one session now runs. The agent-preset seat calls
    * this after a successful blank-session switch, so the header label moves
    * with the composition instead of waiting for the next full list refresh.

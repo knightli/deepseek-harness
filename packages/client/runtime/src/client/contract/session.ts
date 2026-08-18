@@ -55,11 +55,21 @@ export interface ISession {
   readonly projections: ProjectionsFace
   /** One object-layer model authority; UI entries subscribe without copying its business state. */
   readonly modelDirectory: ObservableSnapshot<SessionModelDirectorySnapshot>
-  /** Read or join this ready generation's authoritative model directory. */
+  /**
+   * Read or join this ready generation's authoritative model directory.
+   * @returns the cached or in-flight Host result for the ready generation.
+   */
   loadModels(): Promise<RpcResult<SessionModels>>
-  /** Explicitly invalidate and refresh the model directory after an owner event. */
+  /**
+   * Explicitly invalidate and refresh the model directory after an owner event.
+   * @returns the replacement Host result after the previous authority is withdrawn.
+   */
   refreshModels(): Promise<RpcResult<SessionModels>>
-  /** Select the complete provider/model/reasoning route for the next assembled step. */
+  /**
+   * Select the complete provider/model/reasoning route for the next assembled step.
+   * @param selection - complete provider, model, and optional reasoning effort.
+   * @returns the Host-accepted selection, or a business/transport error.
+   */
   selectModel(selection: ModelSelection): Promise<RpcResult<{ selected: ModelSelection }>>
   /**
    * Send a prompt into the session.
