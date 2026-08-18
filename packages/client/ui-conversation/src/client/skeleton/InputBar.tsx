@@ -23,7 +23,9 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
+import {
+  useSessionCapabilities, type ComposerAttachment, type ComposerBarProps,
+} from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import {
@@ -31,7 +33,6 @@ import {
 } from '../image-labels.ts'
 import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
-import { useSessionCapabilities } from '../session-capabilities.ts'
 import css from './InputBar.module.css'
 
 const IMAGE_INPUT_UNAVAILABLE = 'This session does not support image input.'

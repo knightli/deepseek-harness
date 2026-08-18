@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import type { SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import { useSessionCapabilities } from '../src/client/session-capabilities.ts'
+import { useSessionCapabilities } from '../src/client/contract/slots.ts'
 
 afterEach(cleanup)
 
