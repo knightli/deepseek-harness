@@ -35,7 +35,7 @@ function row(id: string, text: string | null, preview = text ?? '[image]'): Queu
 
 function snapshotWith(queue: QueuedMessage[]): ConversationSnapshot {
   return {
-    sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+    sessionId: SID, sessionCapabilities: undefined, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
     pending: [], queue, running: true, composerPhase: 'active', removed: false, openState: 'open', openError: null,
     hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,

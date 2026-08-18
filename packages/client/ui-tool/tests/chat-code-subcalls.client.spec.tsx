@@ -80,7 +80,7 @@ function snapshotWith(
   const nestedNodes = nodes.map(node => ({ ...node, subCalls }))
   const nestedRunningCalls = runningCalls.map(call => ({ ...call, subCalls }))
   return {
-    sessionId: SID, views: EMPTY_CONVERSATION_VIEWS,
+    sessionId: SID, sessionCapabilities: undefined, views: EMPTY_CONVERSATION_VIEWS,
     chat: toolChatSnapshot(nestedNodes, nestedRunningCalls),
     nodes: nestedNodes, turnTimings: new Map(), turnEnds: new Map(), partial: null,
     runningCalls: nestedRunningCalls,

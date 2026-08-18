@@ -88,6 +88,7 @@ function historySnapshot(
   }
   return {
     sessionId: SID,
+    sessionCapabilities: undefined,
     views: {
       get: target => target === 'trajectory' ? trajectory : undefined,
     },

@@ -2,9 +2,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { resolveSlotLabel, type BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  resolveWorkspacePath, type ClientContext, type ISessions, type SessionId,
+  resolveWorkspacePath, type ISessions, type SessionId,
 } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ConnectionHandle, SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
 // Type-only: the ctx.settingsScope Context merge. Cross-plugin collaboration
 // goes through the service, never a value import (client bundle purity gate).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -50,7 +49,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** Services required by the conversation plugin. */
 export const inject = [
-  'slots', 'layout', 'sessions', 'workspaces', 'locale', 'connection', 'remote', 'settingsScope',
+  'slots', 'layout', 'sessions', 'workspaces', 'locale', 'remote', 'settingsScope',
   'conversationEvents', 'conversationViews',
 ]
 
@@ -118,7 +117,6 @@ export function apply(ctx: Context): void {
   const workspaces = ctx.workspaces
   const layout = ctx.layout
   const slots = ctx.slots
-  const connection = (ctx as ClientContext & { readonly connection: ConnectionHandle }).connection
 
   registerConversationNodes(ctx)
   registerChatNodeRenderers(ctx)
@@ -129,12 +127,6 @@ export function apply(ctx: Context): void {
   // translate as a thunk, so it follows the active locale without
   // re-registration; components read the standard `t` seat instead.
   const t = ctx.locale.bind(NS)
-  const loadSessionCapabilities = async (sessionId: SessionId): Promise<SessionCapabilities> => {
-    const { result } = await connection.api.sessions.models({ sessionId })
-    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-    return result.value.capabilities
-  }
-
   // Apply-time construction keeps store identity bound to this fiber.
   const chatStore = createChatStore()
   const submissionPolicy = new ComposerSubmissionPolicy(
@@ -295,7 +287,6 @@ export function apply(ctx: Context): void {
     inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
       if (sessionId === undefined) {
         return {
-          loadSessionCapabilities,
           keyboard: undefined,
           addImages: undefined,
           removeImage: undefined,
@@ -312,7 +303,6 @@ export function apply(ctx: Context): void {
       const shell = inputHub.shell(sessionId)
       const inputTriggers = inputHub.inputTriggers(sessionId)
       return {
-        loadSessionCapabilities,
         keyboard: shell,
         addImages: (files) => {
           try {
@@ -396,7 +386,6 @@ export function apply(ctx: Context): void {
       const conversation = concreteConversation(ctx)
       const scoped = scopedConversation(sessions, sessionId)
       return {
-        loadSessionCapabilities,
         openDetails: (target) => {
           actions.select(target)
           layout.openDetails()

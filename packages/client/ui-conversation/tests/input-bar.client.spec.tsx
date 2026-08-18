@@ -40,6 +40,7 @@ const SID = 's1' as SessionId
 function snapshotOf(overrides: Partial<ConversationSnapshot> = {}): ConversationSnapshot {
   return {
     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+    sessionCapabilities: { imageInput: true, modelSelection: true, fork: true },
     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
@@ -89,12 +90,12 @@ interface BenchOptions {
   commandMenuOpen?: boolean
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
-  /** Private capability lookup injected by the conversation package apply. */
-  loadSessionCapabilities?: (sessionId: SessionId) => Promise<{
+  /** Object-layer operation support; explicit undefined models pending/failure. */
+  sessionCapabilities?: {
     readonly imageInput: boolean
     readonly modelSelection: boolean
     readonly fork: boolean
-  }>
+  } | undefined
 }
 
 /** One pending queue row (the runtime snapshot shape, as the dock tests build it). */
@@ -115,6 +116,9 @@ function bench(over?: BenchOptions) {
     removed: over?.disabled ?? false,
     promptError: over?.promptError ?? null,
     queue: over?.queue ?? [],
+    sessionCapabilities: Object.hasOwn(over ?? {}, 'sessionCapabilities')
+      ? over?.sessionCapabilities
+      : { imageInput: true, modelSelection: true, fork: true },
   }))
   type ShellDeps = ConstructorParameters<typeof SessionInputShell>[0]
   const shell = new SessionInputShell({
@@ -195,14 +199,7 @@ function bench(over?: BenchOptions) {
     ...(over?.overlay !== undefined ? { overlay: over.overlay } : {}),
     ...(over?.leftItems !== undefined ? { leftItems: over.leftItems } : {}),
     ...(over?.rightItems !== undefined ? { rightItems: over.rightItems } : {}),
-    loadSessionCapabilities: over?.loadSessionCapabilities ?? (() => Promise.resolve({
-      imageInput: true,
-      modelSelection: true,
-      fork: true,
-    })),
-  } as InputBarProps & {
-    loadSessionCapabilities: NonNullable<BenchOptions['loadSessionCapabilities']>
-  }
+  } as InputBarProps
   const view = render(<InputBar {...props} />)
   const textarea = view.container.querySelector('textarea')!
   const primaryStops = over?.running === true && over.subagent === undefined
@@ -228,7 +225,7 @@ describe('image draft rail', () => {
     const { view, textarea, shell } = bench({
       draft: 'keep',
       addImages,
-      loadSessionCapabilities: () => Promise.reject(new Error('models unavailable')),
+      sessionCapabilities: undefined,
     })
     const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
 
@@ -252,11 +249,11 @@ describe('image draft rail', () => {
     const { view, shell } = bench({
       draft: 'keep',
       addImages,
-      loadSessionCapabilities: () => Promise.resolve({
+      sessionCapabilities: {
         imageInput: false,
         modelSelection: true,
         fork: true,
-      }),
+      },
     })
     await capabilitiesReady()
     const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
@@ -275,25 +272,21 @@ describe('image draft rail', () => {
     'fails closed across an A to B switch when B capability lookup is %s',
     async (mode) => {
       const secondSession = 's2' as SessionId
-      const pending = new Promise<{ imageInput: boolean; modelSelection: boolean; fork: boolean }>(() => undefined)
-      const loadSessionCapabilities = vi.fn((sessionId: SessionId) => {
-        if (sessionId === SID) {
-          return Promise.resolve({ imageInput: true, modelSelection: true, fork: true })
-        }
-        if (mode === 'false') {
-          return Promise.resolve({ imageInput: false, modelSelection: true, fork: true })
-        }
-        if (mode === 'error') return Promise.reject(new Error('capability unavailable'))
-        return pending
-      })
       const addImages = vi.fn(() => null)
-      const { view, props, textarea, shell } = bench({
+      const { view, props, textarea, shell, session } = bench({
         draft: 'keep',
         addImages,
-        loadSessionCapabilities,
       })
       await capabilitiesReady()
 
+      act(() => {
+        session.set(snapshotOf({
+          sessionId: secondSession,
+          sessionCapabilities: mode === 'false'
+            ? { imageInput: false, modelSelection: true, fork: true }
+            : undefined,
+        }))
+      })
       view.rerender(<InputBar {...props} sessionId={secondSession} />)
       const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
       fireEvent.paste(textarea, {

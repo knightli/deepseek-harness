@@ -115,6 +115,7 @@ async function scopedBench(register?: (inputTriggers: InputTriggerService) => vo
   const wiring = shell
   const sessionStore = createSnapshotStore<ConversationSnapshot>({
     sessionId, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+    sessionCapabilities: { imageInput: true, modelSelection: true, fork: true },
     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
@@ -135,7 +136,6 @@ async function scopedBench(register?: (inputTriggers: InputTriggerService) => vo
     useProjection: (() => undefined),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
-    loadSessionCapabilities: () => Promise.resolve({ imageInput: true, modelSelection: true, fork: true }),
     keyboard: shell,
     addImages: () => null,
     removeImage: () => {},

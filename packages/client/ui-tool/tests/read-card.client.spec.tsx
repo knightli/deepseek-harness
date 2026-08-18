@@ -299,7 +299,7 @@ describe('DetailsPanel Output section (read)', () => {
     const nodes = over.nodes ?? []
     const runningCalls = over.runningCalls ?? []
     return {
-      sessionId: SID, views: EMPTY_CONVERSATION_VIEWS,
+      sessionId: SID, sessionCapabilities: undefined, views: EMPTY_CONVERSATION_VIEWS,
       chat: over.chat ?? toolChatSnapshot(nodes, runningCalls),
       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,

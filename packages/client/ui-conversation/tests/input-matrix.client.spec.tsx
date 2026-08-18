@@ -29,6 +29,7 @@ const SID = 's1' as SessionId
 function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled?: boolean }) {
   const session = createSnapshotStore<ConversationSnapshot>({
     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+    sessionCapabilities: { imageInput: true, modelSelection: true, fork: true },
     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
     pending: [], queue: [], running: over?.running ?? false, composerPhase: 'active',
     removed: over?.disabled ?? false, openState: 'open', openError: null, hasMore: false,
@@ -49,7 +50,6 @@ function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled
     useProjection: (() => undefined),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
-    loadSessionCapabilities: () => Promise.resolve({ imageInput: true, modelSelection: true, fork: true }),
     keyboard: shell,
     addImages: () => null,
     removeImage: () => {},

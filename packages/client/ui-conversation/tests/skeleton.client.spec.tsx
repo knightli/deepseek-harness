@@ -74,6 +74,7 @@ const workspaceState = (items: readonly WorkspaceView[]): WorkspaceListState => 
 function conversationSnapshot(overrides: Partial<ConversationSnapshot> = {}): ConversationSnapshot {
   return {
     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+    sessionCapabilities: { imageInput: true, modelSelection: true, fork: true },
     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
@@ -198,7 +199,6 @@ function mount(
           useProjection={(() => undefined)}
           useInput={useInput}
           inputActions={inputActions}
-          loadSessionCapabilities={() => Promise.resolve({ imageInput: true, modelSelection: true, fork: true })}
           keyboard={wiring}
           addImages={() => null}
           removeImage={() => {}}

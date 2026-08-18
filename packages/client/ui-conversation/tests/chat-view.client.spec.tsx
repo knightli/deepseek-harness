@@ -50,6 +50,7 @@ type RoutedChatNodeOwner = ChatNodeOwnerProps & { readonly node: ChatNode }
 function snapshotBase(): ConversationSnapshot {
   return {
     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: chatSnapshotFixture(), nodes: [],
+    sessionCapabilities: { imageInput: true, modelSelection: true, fork: true },
     turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
     hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
@@ -149,13 +150,7 @@ function emptyWorkspaces() {
   return bindSnapshotSelector(store)
 }
 
-function makeHarness(init?: Partial<ConversationSnapshot>, capabilities?: {
-  loadSessionCapabilities: (sessionId: SessionId) => Promise<{
-    readonly imageInput: boolean
-    readonly modelSelection: boolean
-    readonly fork: boolean
-  }>
-}) {
+function makeHarness(init?: Partial<ConversationSnapshot>) {
   const { set, source } = makeSource(init)
   const openDetails = vi.fn<(t: SelectionTarget) => void>()
   const openFile = vi.fn<(path: string) => void>()
@@ -297,14 +292,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>, capabilities?: {
     fileMentions: () => undefined,
     // Mirrors the real lookup chain (conversation namespace, then common).
     t,
-    ...(capabilities ?? {
-      loadSessionCapabilities: () => Promise.resolve({
-        imageInput: true,
-        modelSelection: true,
-        fork: true,
-      }),
-    }),
-  } as ChatViewSlotProps & typeof capabilities
+  } as ChatViewSlotProps
   const setSelection = (next: SelectionTarget | null): void => { chat.actions.select(next) }
   return {
     set, ChatView, props, openDetails, openFile, loadOlder, inspectCall,
@@ -754,40 +742,26 @@ describe('ChatView', () => {
     expect(h.forkAt.mock.calls).toEqual([[2]])
   })
 
-  it('omits branch admission when session capability lookup fails', async () => {
-    const loadSessionCapabilities = vi.fn(() => Promise.reject(new Error('models unavailable')))
+  it('omits branch admission while session capabilities are unavailable', () => {
     const h = makeHarness({
       nodes: [user(1, 'question'), assistant(2, 'answer')],
       turnEnds: new Map([[1, 3]]),
-    }, {
-      loadSessionCapabilities,
+      sessionCapabilities: undefined,
     })
     const view = render(<h.ChatView {...h.props} />)
 
-    await waitFor(() => {
-      expect(loadSessionCapabilities).toHaveBeenCalledWith(SID)
-    })
-    await act(async () => { await Promise.resolve() })
     expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()
     expect(h.forkAt).not.toHaveBeenCalled()
   })
 
   it('omits branch admission when the session explicitly declines fork', async () => {
-    const loadSessionCapabilities = vi.fn(() => Promise.resolve({
-      imageInput: true,
-      modelSelection: true,
-      fork: false,
-    }))
     const h = makeHarness({
       nodes: [user(1, 'question'), assistant(2, 'answer')],
       turnEnds: new Map([[1, 3]]),
-    }, { loadSessionCapabilities })
+      sessionCapabilities: { imageInput: true, modelSelection: true, fork: false },
+    })
     const view = render(<h.ChatView {...h.props} />)
 
-    await waitFor(() => {
-      expect(loadSessionCapabilities).toHaveBeenCalledWith(SID)
-    })
-    await act(async () => { await Promise.resolve() })
     await waitFor(() => {
       expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()
     })
@@ -798,24 +772,21 @@ describe('ChatView', () => {
     'omits branch admission across an A to B switch when B capability lookup is %s',
     async (mode) => {
       const secondSession = 's2' as SessionId
-      const pending = new Promise<{ imageInput: boolean; modelSelection: boolean; fork: boolean }>(() => undefined)
-      const loadSessionCapabilities = vi.fn((sessionId: SessionId) => {
-        if (sessionId === SID) {
-          return Promise.resolve({ imageInput: true, modelSelection: true, fork: true })
-        }
-        if (mode === 'false') {
-          return Promise.resolve({ imageInput: true, modelSelection: true, fork: false })
-        }
-        if (mode === 'error') return Promise.reject(new Error('capability unavailable'))
-        return pending
-      })
       const h = makeHarness({
         nodes: [user(1, 'question'), assistant(2, 'answer')],
         turnEnds: new Map([[1, 3]]),
-      }, { loadSessionCapabilities })
+      })
       const view = render(<h.ChatView {...h.props} />)
       expect(await view.findByRole('button', { name: '在新对话中分支' })).toBeTruthy()
 
+      act(() => {
+        h.set({
+          sessionId: secondSession,
+          sessionCapabilities: mode === 'false'
+            ? { imageInput: true, modelSelection: true, fork: false }
+            : undefined,
+        })
+      })
       view.rerender(<h.ChatView {...h.props} sessionId={secondSession} />)
 
       expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()

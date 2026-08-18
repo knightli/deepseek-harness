@@ -7,6 +7,7 @@ import type {
   HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
   RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
 } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -89,6 +90,12 @@ export class Session implements SessionFace {
   private connectionGeneration = 0
   /** The sole generation whose interaction responses may reach the carrier. */
   private answerableGeneration: number | null = 0
+  /** Fail-closed operation support for the current ready connection generation. */
+  private sessionCapabilities: SessionCapabilities | undefined
+  /** Generation already read, so duplicate readiness signals cannot duplicate the RPC. */
+  private capabilityRequestedGeneration: number | null = null
+  /** Request identity fence; generation start invalidates an older in-flight response. */
+  private capabilityRequestNonce = 0
   /** Authoritative stream-only inbox snapshot; pending work never hits history. */
   private readonly queueMirror = new SessionQueueMirror()
   /** Session-owned business Context engine over the contiguous raw window. */
@@ -169,6 +176,9 @@ export class Session implements SessionFace {
       this.snapshotCache = this.buildSnapshot()
     })
     this.snapshotCache = this.buildSnapshot()
+    if (this.answerableGeneration !== null) {
+      void this.loadSessionCapabilities(this.connectionGeneration)
+    }
   }
 
   /**
@@ -491,6 +501,12 @@ export class Session implements SessionFace {
   handleGenerationStart(generation: number): void {
     this.connectionGeneration = generation
     this.answerableGeneration = null
+    this.capabilityRequestNonce++
+    this.capabilityRequestedGeneration = null
+    if (this.sessionCapabilities !== undefined) {
+      this.sessionCapabilities = undefined
+      this.notifier.markDirty()
+    }
   }
 
   /** Preserve visible waits while making every retained carrier locally unavailable. */
@@ -505,6 +521,7 @@ export class Session implements SessionFace {
   handleConnected(generation: number): void {
     if (generation !== this.connectionGeneration) return
     this.answerableGeneration = generation
+    void this.loadSessionCapabilities(generation)
     void this.resync(generation)
   }
 
@@ -804,6 +821,7 @@ export class Session implements SessionFace {
     const legacy = chat.legacy
     return {
       sessionId: this.sessionId,
+      sessionCapabilities: this.sessionCapabilities,
       views: this.conversation,
       chat,
       nodes: legacy.nodes,
@@ -832,6 +850,26 @@ export class Session implements SessionFace {
       promptError: this.promptError,
       blank: this.blankBit,
       lastAgentError: this.lastAgentError,
+    }
+  }
+
+  /** Read operation support once for a ready generation and fence late responses. */
+  private async loadSessionCapabilities(generation: number): Promise<void> {
+    if (this.capabilityRequestedGeneration === generation) return
+    this.capabilityRequestedGeneration = generation
+    const requestNonce = ++this.capabilityRequestNonce
+    try {
+      const { result } = await this.api.sessions.models({ sessionId: this.sessionId })
+      if (
+        !result.ok
+        || requestNonce !== this.capabilityRequestNonce
+        || generation !== this.connectionGeneration
+        || generation !== this.answerableGeneration
+      ) return
+      this.sessionCapabilities = result.value.capabilities
+      this.notifier.markDirty()
+    } catch {
+      // Transport failures are capability absence for this generation.
     }
   }
 

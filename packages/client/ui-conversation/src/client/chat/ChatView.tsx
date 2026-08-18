@@ -15,7 +15,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useSessionCapabilities, type ChatViewSlotProps } from '../contract/slots.ts'
+import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { PendingSteeringBubble } from './MessageItem.tsx'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
 import { formatRunDuration } from './message-chrome.ts'
@@ -145,7 +145,7 @@ function TurnStatus({ startTime, t }: {
  */
 export function ChatView({
   useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt,
-  loadSessionCapabilities, fileMentions, t,
+  fileMentions, t,
 }: ChatViewSlotProps) {
   const order = useSession(s => s.chat.order)
   const nodeStore = useSession(s => s.chat.nodes)
@@ -159,7 +159,7 @@ export function ChatView({
   const hasMore = useSession(s => s.hasMore)
   const loadingOlder = useSession(s => s.loadingOlder)
   const selectedCallId = useStore(s => s.selection?.callId)
-  const { fork } = useSessionCapabilities(sessionId, loadSessionCapabilities)
+  const fork = useSession(s => s.sessionCapabilities?.fork) ?? false
 
   const pendingSteering = useMemo(
     () => inbox.filter(item => item.placement === 'steering'),

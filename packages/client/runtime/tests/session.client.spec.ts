@@ -175,6 +175,133 @@ function histResponse(events: SessionEvent[], hasMore = false) {
   return Promise.resolve(ok({ events: entries(events) as never[], hasMore }))
 }
 
+describe('capability snapshot', () => {
+  it('publishes one fail-closed session.models result from the Session object layer', async () => {
+    const api = new FakeApiClient()
+    const gate = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    api.onModels = () => gate.promise
+
+    const { session } = makeSession(api)
+    const firstSubscriber = vi.fn()
+    const secondSubscriber = vi.fn()
+    const unsubscribeFirst = session.subscribe(firstSubscriber)
+    const unsubscribeSecond = session.subscribe(secondSubscriber)
+
+    expect(api.callsOf('session.models')).toEqual([
+      { sessionId: SID },
+    ])
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+
+    gate.resolve(ok({
+      current: api.defaultModel,
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: false, fork: false },
+      groups: [],
+      failures: [],
+    }))
+    await gate.promise
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(session.getSnapshot().sessionCapabilities).toEqual({
+      imageInput: false,
+      modelSelection: false,
+      fork: false,
+    })
+    expect(api.callsOf('session.models')).toHaveLength(1)
+    expect(firstSubscriber).toHaveBeenCalledTimes(1)
+    expect(secondSubscriber).toHaveBeenCalledTimes(1)
+    unsubscribeFirst()
+    unsubscribeSecond()
+  })
+
+  it('clears synchronously at generation start and reads at most once when that generation is ready', async () => {
+    const api = new FakeApiClient()
+    const first = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    const second = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    api.onModels = () => first.promise
+    const { session } = makeSession(api)
+    first.resolve(ok({
+      current: api.defaultModel,
+      routable: true,
+      capabilities: { imageInput: true, modelSelection: true, fork: true },
+      groups: [],
+      failures: [],
+    }))
+    await first.promise
+    await Promise.resolve()
+    expect(session.getSnapshot().sessionCapabilities?.imageInput).toBe(true)
+
+    api.onModels = () => second.promise
+    session.handleGenerationStart(1)
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    session.handleConnected(1)
+    session.handleConnected(1)
+    expect(api.callsOf('session.models')).toHaveLength(2)
+
+    second.resolve(ok({
+      current: api.defaultModel,
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: false, fork: false },
+      groups: [],
+      failures: [],
+    }))
+    await second.promise
+    await Promise.resolve()
+    expect(session.getSnapshot().sessionCapabilities?.imageInput).toBe(false)
+  })
+
+  it('drops a stale generation result and keeps failures unavailable', async () => {
+    const api = new FakeApiClient()
+    const stale = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    const current = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    api.onModels = () => stale.promise
+    const { session } = makeSession(api)
+
+    session.handleGenerationStart(1)
+    api.onModels = () => current.promise
+    session.handleConnected(1)
+    stale.resolve(ok({
+      current: api.defaultModel,
+      routable: true,
+      capabilities: { imageInput: true, modelSelection: true, fork: true },
+      groups: [],
+      failures: [],
+    }))
+    await stale.promise
+    await Promise.resolve()
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+
+    current.resolve(err({ code: 'internal', message: 'unavailable', details: {} }))
+    await current.promise
+    await Promise.resolve()
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+
+    session.handleGenerationStart(2)
+    api.onModels = () => Promise.reject(new Error('transport unavailable'))
+    session.handleConnected(2)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+  })
+
+  it('keeps a replacement Session unavailable until its ready generation answers', async () => {
+    const api = new FakeApiClient()
+    const gate = deferred<Awaited<ReturnType<FakeApiClient['onModels']>>>()
+    api.onModels = () => gate.promise
+    const session = new Session(SID, api, fakeRemote(), {
+      conversation: TEST_CONVERSATION,
+      connectionGeneration: 7,
+      connectionReady: false,
+    })
+
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    expect(api.callsOf('session.models')).toHaveLength(0)
+    session.handleConnected(7)
+    expect(api.callsOf('session.models')).toHaveLength(1)
+  })
+})
+
 describe('open', () => {
   it('keeps a bare Session blank until an authoritative lifecycle signal arrives', () => {
     const { session } = makeSession()
@@ -665,7 +792,7 @@ describe('remaining branches', () => {
   it('loadOlder guards: not-open/no-hasMore no-op, err result kept window, empty page updates hasMore, throw fail-soft', async () => {
     const { api, session } = makeSession()
     await session.loadOlder() // cold: no-op, zero calls
-    expect(api.calls).toEqual([])
+    expect(api.callsOf('session.history')).toEqual([])
     api.onHistory = () => histResponse(plainTurn(6, 1, 'x', 'y'), true)
     await session.open()
     // err result: window unchanged
@@ -931,7 +1058,7 @@ describe('resync', () => {
 
     const cold = makeSession()
     await cold.session.resync()
-    expect(cold.api.calls).toEqual([]) // never opened: no traffic
+    expect(cold.api.callsOf('session.history')).toEqual([]) // never opened: no history traffic
   })
 
   it('re-mints a replayed requested frame as a fresh wait with the same key (old reference superseded)', async () => {

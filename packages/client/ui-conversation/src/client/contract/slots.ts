@@ -1,5 +1,5 @@
 /** Conversation slot declarations and their composed component props. */
-import { useEffect, useState, type ReactNode, type RefObject } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
   InjectFace, MaybeSnapshotSelectorHook, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
@@ -11,7 +11,7 @@ import type {
   TurnLocation, WorkspaceId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MessageId, SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
+import type { MessageId } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ComposerBlock } from '../input/blocks.ts'
 import type {
@@ -491,8 +491,6 @@ export interface ComposerBarOwnerProps {
 
 /** Injected share of the composer-bar entry (package-internal faces). */
 export interface ComposerBarInjected {
-  /** Read authoritative operation admission for the current session. */
-  loadSessionCapabilities: (sessionId: SessionId) => Promise<SessionCapabilities>
   /** The InputBar-exclusive keyboard/DOM command face (private plane); absent with the session. */
   keyboard: ComposerKeyboard | undefined
   /** Create previews and append image ids to the session input. */
@@ -675,8 +673,6 @@ export interface ChatScrollPosition {
  * outside the view (layout orchestration; the session object layer).
  */
 export interface ChatViewInjected {
-  /** Read authoritative operation admission for the current session. */
-  loadSessionCapabilities: (sessionId: SessionId) => Promise<SessionCapabilities>
   /** Selection write + details panel opening in one gesture (store action + layout orchestration). */
   openDetails: (target: SelectionTarget) => void
   /**
@@ -737,46 +733,4 @@ export interface EmptyWorkspaceOwnerProps {
   selectedId?: WorkspaceId | undefined
   onPick: (workspaceId: WorkspaceId) => void
   onClose: () => void
-}
-
-/** Fail-closed capability snapshot used before and after an unavailable read. */
-export const UNAVAILABLE_SESSION_CAPABILITIES: SessionCapabilities = Object.freeze({
-  imageInput: false,
-  modelSelection: false,
-  fork: false,
-})
-
-interface LoadedSessionCapabilities {
-  readonly sessionId: SessionId | undefined
-  readonly load: (sessionId: SessionId) => Promise<SessionCapabilities>
-  readonly capabilities: SessionCapabilities
-}
-
-/**
- * Read one session's operation admission without introducing a second store.
- * @param sessionId - exact session whose operations the caller may expose.
- * @param load - current authoritative capability reader.
- * @returns the matching loaded snapshot, or the fail-closed snapshot while unavailable.
- */
-export function useSessionCapabilities(
-  sessionId: SessionId | undefined,
-  load: (sessionId: SessionId) => Promise<SessionCapabilities>,
-): SessionCapabilities {
-  const [loaded, setLoaded] = useState<LoadedSessionCapabilities>()
-
-  useEffect(() => {
-    let current = true
-    if (sessionId !== undefined) {
-      void load(sessionId).then((next) => {
-        if (current) setLoaded({ sessionId, load, capabilities: next })
-      }).catch(() => {
-        // Loading and transport/schema failures retain the fail-closed snapshot.
-      })
-    }
-    return () => { current = false }
-  }, [load, sessionId])
-
-  return loaded !== undefined && loaded.sessionId === sessionId && loaded.load === load
-    ? loaded.capabilities
-    : UNAVAILABLE_SESSION_CAPABILITIES
 }

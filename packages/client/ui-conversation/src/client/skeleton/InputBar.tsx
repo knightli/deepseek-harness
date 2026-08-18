@@ -23,9 +23,7 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import {
-  useSessionCapabilities, type ComposerAttachment, type ComposerBarProps,
-} from '../contract/slots.ts'
+import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import {
@@ -49,7 +47,7 @@ export type InputBarProps = ComposerBarProps
 
 export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  loadSessionCapabilities, resolveSubmitMode, toggleCommandMenu, stop, command, t,
+  resolveSubmitMode, toggleCommandMenu, stop, command, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -92,7 +90,7 @@ export function InputBar({
   // The deployment's image-intake limits (absent while no attachment service
   // is composed — the pre-check below then defers entirely to the host).
   const imageLimits = useProjection('imageLimits')
-  const { imageInput } = useSessionCapabilities(sessionId, loadSessionCapabilities)
+  const imageInput = useSession(s => s.sessionCapabilities?.imageInput) ?? false
   // Prompt failures are ordinary failures (no create/attach transaction exists
   // anymore): the toast announces promptError, the draft stays in the machine,
   // and the user resubmits. A remount over a session whose machine still holds

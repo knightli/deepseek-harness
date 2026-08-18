@@ -380,6 +380,10 @@ function ciArtifactGates(): Gate[] {
       needs: ['build'],
     }),
     builtPackageInvariantsGate(['build']),
+    pnpmScript('ui-conversation-package-inventory', 'verify-ui-conversation-package-inventory', {
+      label: 'ui-conversation packed inventory',
+      needs: ['build'],
+    }),
     builtBinSmokeGate(),
   ]
 }
