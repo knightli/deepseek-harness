@@ -81,7 +81,7 @@ function selectionOf(state: ModelDirectoryState, id: string): ModelSelection | u
       if (rowId(group.id, model.id) !== id) continue
       const sameRoute = state.current?.provider === group.id && state.current.model === model.id
       const reasoningEffort = sameRoute
-        ? state.current?.reasoningEffort ?? model.reasoning?.defaultEffort
+        ? state.current.reasoningEffort ?? model.reasoning?.defaultEffort
         : model.reasoning?.defaultEffort
       return {
         provider: group.id,
@@ -97,7 +97,7 @@ function selectionOf(state: ModelDirectoryState, id: string): ModelSelection | u
 const NS = 'model'
 
 /** Required services: the contribution registry, the seat's slot registry, locale, and the service's own faces. */
-export const inject = ['commandUi', 'connection', 'locale', 'sessions', 'slots', 'remote']
+export const inject = ['commandUi', 'locale', 'sessions', 'slots', 'remote']
 
 /**
  * Client plugin body: mount ModelDirectoryResolver, register the `model` dictionaries,

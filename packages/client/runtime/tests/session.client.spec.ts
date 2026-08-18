@@ -209,8 +209,9 @@ describe('capability snapshot', () => {
       fork: false,
     })
     expect(api.callsOf('session.models')).toHaveLength(1)
-    expect(firstSubscriber).toHaveBeenCalledTimes(1)
-    expect(secondSubscriber).toHaveBeenCalledTimes(1)
+    // The shared source publishes its loading edge and its settled authority.
+    expect(firstSubscriber).toHaveBeenCalledTimes(2)
+    expect(secondSubscriber).toHaveBeenCalledTimes(2)
     unsubscribeFirst()
     unsubscribeSecond()
   })
@@ -299,6 +300,77 @@ describe('capability snapshot', () => {
     expect(api.callsOf('session.models')).toHaveLength(0)
     session.handleConnected(7)
     expect(api.callsOf('session.models')).toHaveLength(1)
+  })
+
+  it('clears published capabilities synchronously for the whole reconnect backoff', async () => {
+    const { session } = makeSession()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(session.getSnapshot().sessionCapabilities?.imageInput).toBe(true)
+
+    session.handleDisconnected()
+
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+  })
+
+  it('shares the ready-generation model result with model-directory consumers', async () => {
+    const { api, session } = makeSession()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const result = await session.loadModels()
+
+    expect(result.ok).toBe(true)
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({
+      current: api.defaultModel,
+      routable: true,
+      status: 'ready',
+    })
+    expect(api.callsOf('session.models')).toHaveLength(1)
+  })
+
+  it('never reads ordinary Agent model state for an addressed child', async () => {
+    const api = new FakeApiClient()
+    const session = new Session(SID, api, fakeRemote(), {
+      conversation: TEST_CONVERSATION,
+      address: {
+        parentSessionId: PARENT,
+        childSessionId: SID,
+        mode: 'continuable',
+      },
+    })
+
+    await Promise.resolve()
+
+    expect(api.callsOf('session.models')).toHaveLength(0)
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({ status: 'idle' })
+  })
+
+  it('fences a late model selection across disconnect and address changes', async () => {
+    const api = new FakeApiClient()
+    const select = deferred<Awaited<ReturnType<FakeApiClient['onSelectModel']>>>()
+    api.onSelectModel = () => select.promise
+    const { session } = makeSession(api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const pending = session.selectModel({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+    session.handleDisconnected()
+    session.configureSubagent({
+      parentSessionId: PARENT,
+      childSessionId: SID,
+      mode: 'continuable',
+    }, true)
+    select.resolve(ok({ selected: { provider: 'deepseek-official', model: 'deepseek-v4-pro' } }))
+
+    await expect(pending).resolves.toMatchObject({ ok: true })
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({
+      current: null,
+      capabilities: undefined,
+      status: 'idle',
+    })
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
   })
 })
 

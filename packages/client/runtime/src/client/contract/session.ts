@@ -11,9 +11,30 @@ import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-atta
 import type {
   MessageId, PromptContentPart, QueueAction, RpcResult, SessionId,
 } from '@deepseek-ai/dsh-api-remotes/client'
+import type {
+  ModelCatalogFailure, ModelProviderGroup, ModelSelection, SessionCapabilities, SessionModels,
+} from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConversationSnapshot } from '../sessions/conversation.ts'
 import type { ObservableSnapshot } from './store.ts'
+
+/** Session-owned model directory projection shared by every stock model-selection entry. */
+export interface SessionModelDirectorySnapshot {
+  /** Host selection for the next assembled step; null until the first successful read. */
+  readonly current: ModelSelection | null
+  /** Whether the Host can route ordinary text for the current selection. */
+  readonly routable: boolean | null
+  /** Host-advertised operation admission for the current ready generation. */
+  readonly capabilities: SessionCapabilities | undefined
+  /** Last successfully loaded provider groups. */
+  readonly groups: readonly ModelProviderGroup[]
+  /** Provider-local catalog failures from the last successful read. */
+  readonly failures: readonly ModelCatalogFailure[]
+  /** Current directory or selection operation state. */
+  readonly status: 'idle' | 'loading' | 'ready' | 'selecting' | 'error'
+  /** Whole-request or selection failure text; provider-local failures stay in {@link failures}. */
+  readonly error: string | null
+}
 
 /** Key-addressed projection read face (the useProjection resolution path; see ProjectionValueStore). */
 export interface ProjectionsFace {
@@ -32,6 +53,14 @@ export interface ISession {
   readonly sessionId: SessionId
   /** Host-computed projection values by key (the useProjection seat). */
   readonly projections: ProjectionsFace
+  /** One object-layer model authority; UI entries subscribe without copying its business state. */
+  readonly modelDirectory: ObservableSnapshot<SessionModelDirectorySnapshot>
+  /** Read or join this ready generation's authoritative model directory. */
+  loadModels(): Promise<RpcResult<SessionModels>>
+  /** Explicitly invalidate and refresh the model directory after an owner event. */
+  refreshModels(): Promise<RpcResult<SessionModels>>
+  /** Select the complete provider/model/reasoning route for the next assembled step. */
+  selectModel(selection: ModelSelection): Promise<RpcResult<{ selected: ModelSelection }>>
   /**
    * Send a prompt into the session.
    * @param content - text plus browser-owned temporary image uploads.

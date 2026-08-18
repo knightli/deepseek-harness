@@ -2,7 +2,7 @@
 
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isEntry, run } from './release/process.ts'
 import { tarballFiles } from './release/tarball.ts'
@@ -113,6 +113,11 @@ export function assertExactPackageInventory(
   throw new Error(`ui-conversation packed inventory mismatch\n${details.join('\n')}`)
 }
 
+/** Resolve OS temp configuration before handing a destination to a package-root child. */
+export function absolutePackTempRoot(root = tmpdir()): string {
+  return resolve(root)
+}
+
 /** Pack the already-built package and return members observed from that tarball. */
 export function packedUiConversationFiles(packageRoot = UI_CONVERSATION_ROOT): string[] {
   const pnpmEntrypoint = process.env.npm_execpath
@@ -123,7 +128,7 @@ export function packedUiConversationFiles(packageRoot = UI_CONVERSATION_ROOT): s
   ) {
     throw new Error('ui-conversation inventory: invoke this verifier through a pnpm package script')
   }
-  const destination = mkdtempSync(join(tmpdir(), 'dsh-ui-conversation-pack-'))
+  const destination = mkdtempSync(join(absolutePackTempRoot(), 'dsh-ui-conversation-pack-'))
   try {
     // Windows cannot spawn the pnpm.cmd shim directly; use its JavaScript entrypoint shell-free.
     run(process.execPath, [pnpmEntrypoint, 'pack', '--pack-destination', destination], { cwd: packageRoot })

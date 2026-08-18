@@ -256,6 +256,9 @@ jobs:
       - name: Run compatibility, snapshot, and artifact gates
         run: pnpm run check:ci:consumers
 
+      - name: Run exact publication artifact gates
+        run: pnpm run check:ci:artifacts
+
 
   node-compat:
     if: github.event_name == 'pull_request'

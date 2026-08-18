@@ -14,13 +14,13 @@ Status: implemented
 
 `AgentFactory.sessionCapabilities` 是可选的工厂级声明。省略它会保留 stock 行为，包括从 seed fork；`forkFromSeed: false` 会拒绝通用 fork 准入。注册表会从拥有实时 Agent 的工厂，或将要恢复冷会话的活跃工厂读取该声明，而且不会执行恢复。Host 在 `session.models.capabilities` 中返回 `imageInput`、`modelSelection` 和 `fork`，并在相应写入路径中强制执行同一组事实。
 
-runtime Session 通过 `ConversationSnapshot.sessionCapabilities` 持有能力状态；UI 不建立平行 store 或订阅 hook。每个 ready connection generation 中，一个 Session 最多读取一次 `session.models`。generation start 会使当前请求失效并同步清空快照字段；只有 request identity、connection generation 和 answerable generation 仍全部匹配时，响应才能发布。pending、错误、传输失败和迟到响应都保持不可用。InputBar 与 ChatView 使用既有 `useSession` selector，因此彼此独立的控制项共享同一次读取。能力不可用时，图片粘贴与拖放会保留草稿和附件栏，transcript 中也不会出现分支操作。
+runtime Session 持有唯一的 `SessionModels` 权威，并以只读 `modelDirectory` observable 公开。`ConversationSnapshot.sessionCapabilities` 派生自同一个值；stock 模型选择插件把加载、owner 事件刷新与选择委托给 Session，不再保留第二份 groups／current／routable 投影，也不自行发出 RPC。因此，每个消费者都会加入或复用 ready generation 中同一次已结算读取。断连、generation start，以及切换到已寻址 subagent transport，都会同步撤回该权威，使读取与选择失效，并以 request identity、connection generation、answerable generation 和普通会话地址拦截迟到结算。pending、错误、传输失败和迟到响应都保持不可用。InputBar 与 ChatView 使用既有 `useSession` selector；能力不可用时，图片粘贴与拖放会保留草稿和附件栏，transcript 中也不会出现分支操作。
 
 命令注册表公开 `has(name)`，作为覆盖所有全局及作用域注册的只读、无需 Agent 的粗粒度索引。false 能证明明确缺失。`session.prompt` 会在查找 Agent 前以 `unknown-command` 拒绝该缺失，因此冷会话保持冷状态，也不记录事件。true 允许解析 Agent，但不授予作用域可用性：恢复后仍以现有 `find(agent, name)` 为权威，执行时也仍记录 stock `command/run` 和 `command/done` 事件对。两条准入路径都不包含按提供方、Agent 实现或命令名称设置的例外。
 
 ## Verification
 
-runtime 测试要求 pending 与失败 generation 保持不可用，generation start 同步清空，重复 readiness 最多发出一次读取，并丢弃旧 generation 迟到的成功响应。两个 subscriber 会收到同一个成功的 Session 发布，而 API 只记录一次 `session.models` 调用。client 测试从受支持的 session A 切换到不可用或明确拒绝的 session B，要求 B 的首次 render 保留图片草稿与附件栏状态，且不暴露分支操作。artifact gate 会先构建包，再真实执行 `pnpm pack`，通过 `tarballFiles` 列出 tarball，并逐项比较全部 77 个官方 member，其中包括 69 个声明文件和 3 个 runtime JavaScript 文件。
+runtime 测试要求 pending 与失败 generation 保持不可用，断连与 generation start 同步清空，重复消费者共享同一次读取，已寻址 child 不发出普通模型 RPC，并丢弃跨 generation／地址变化迟到的读取或选择。两个 subscriber 观察同一个 Session 权威，而 API 只记录一次 `session.models` 调用。client 测试要求 stock 模型入口订阅同一数据源；同时，从受支持的 session A 切换到不可用或明确拒绝的 session B 时，B 的首次 render 必须保留图片草稿与附件栏状态，且不暴露分支操作。artifact gate 会先构建包，再把真实 `pnpm pack` 输出到绝对临时目录，通过 `tarballFiles` 列出 tarball，并逐项比较全部 77 个官方 member，其中包括 69 个声明文件和 3 个 runtime JavaScript 文件；required workflow lane 会调用这套完全相同的 artifact graph。
 
 公共 Host 测试会向持久冷会话发送未知命令，并要求稳定的 `unknown-command` 响应、工厂恢复调用为零、没有实时 Agent 或会话，以及公开会话列表保持不变。已注册命令可以恢复会话，并必须保留命令生命周期事件对。注册表测试会在全局层和彼此独立的作用域层中持有同一名称，再逐一 dispose，证明直到最后一项注册离开前，粗粒度索引都保持 true。
 

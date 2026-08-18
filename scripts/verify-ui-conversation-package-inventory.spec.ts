@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   OFFICIAL_UI_CONVERSATION_PACKAGE_FILES,
+  absolutePackTempRoot,
   assertExactPackageInventory,
 } from './verify-ui-conversation-package-inventory.ts'
+import { isAbsolute } from 'node:path'
 
 describe('ui-conversation packed publication inventory', () => {
   it('pins the complete official 77-member package, including 69 declarations', () => {
@@ -38,5 +40,9 @@ describe('ui-conversation packed publication inventory', () => {
     ]
     expect(() => { assertExactPackageInventory(OFFICIAL_UI_CONVERSATION_PACKAGE_FILES, actual) })
       .toThrow(/automatic-extra\.d\.ts/)
+  })
+
+  it('resolves a relative process temp directory before passing it to pnpm pack', () => {
+    expect(isAbsolute(absolutePackTempRoot('relative-temp'))).toBe(true)
   })
 })

@@ -14,7 +14,7 @@ import type { TodoItem } from '@deepseek-ai/dsh-session/types'
 import type {
   RpcError, SessionId, SubagentAddress, ToolCallView, ToolResultView,
 } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
+import type { SessionCapabilities } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { PendingInteraction } from './pending.ts'
 import type { ContextProvenanceView, KnownContextForm } from './context-provenance.ts'
 import type {

@@ -12,6 +12,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { createScope } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import { Session } from '../../runtime/src/client/sessions/session.ts'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { TestRemote } from '@deepseek-ai/dsh-client-test-runtime'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
@@ -58,9 +59,19 @@ async function bench() {
   const ctx = new Context()
   let current: ModelSelection = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
   const calls = { models: 0, select: 0 }
-  ctx.provide('connection', { api: { sessions: {
+  let failNextModels = false
+  const api = { sessions: {
     models: () => {
       calls.models += 1
+      if (failNextModels) {
+        failNextModels = false
+        return Promise.resolve({
+          result: {
+            ok: false as const,
+            error: { code: 'internal' as const, message: 'temporary model read failure', details: {} },
+          },
+        })
+      }
       return Promise.resolve({
         result: {
           ok: true as const,
@@ -85,7 +96,7 @@ async function bench() {
       }
       return Promise.resolve({ result: { ok: true as const, value: { selected: current } } })
     },
-  } } })
+  } }
   // Whether the Host reports an adapter for the current route; the composer
   // block follows this, never catalog membership.
   let routable = true
@@ -115,9 +126,12 @@ async function bench() {
   })
   ctx.provide('locale', new LocaleRuntime(ctx))
   const scopes = new Map<SessionId, Context>()
+  const sessionsByScope = new Map<Context, Session>()
+  const sessionsById = new Map<SessionId, Session>()
   const addressed = new Set<SessionId>()
   ctx.provide('sessions', {
     scope: (id: SessionId) => scopes.get(id),
+    sessionOf: (scope: Context) => sessionsByScope.get(scope),
     subagentAddress: (id: SessionId) => addressed.has(id)
       ? { parentSessionId: sid('parent'), childSessionId: id, mode: 'continuable' as const }
       : undefined,
@@ -126,9 +140,27 @@ async function bench() {
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
   await ctx.plugin(function probe() {}).await()
-  const mint = (key: string) => {
+  const mint = (key: string, isAddressed = false) => {
+    const id = sid(key)
+    if (isAddressed) addressed.add(id)
     const handle = createScope(ctx, sid(key))
-    scopes.set(sid(key), handle.ctx)
+    const session = sessionsById.get(id) ?? new Session(id, api as never, {
+      commands: {
+        list: () => Promise.resolve({ ok: true as const, value: [] }),
+        execute: () => Promise.resolve({ ok: true as const, value: undefined }),
+      },
+    }, isAddressed
+      ? {
+        address: {
+          parentSessionId: sid('parent'),
+          childSessionId: id,
+          mode: 'continuable',
+        },
+      }
+      : {})
+    sessionsById.set(id, session)
+    scopes.set(id, handle.ctx)
+    sessionsByScope.set(handle.ctx, session)
     return handle
   }
   return {
@@ -137,7 +169,14 @@ async function bench() {
     seat: () => seats.get('conversation.input.model')!,
     hostCurrent: () => current,
     setHostCurrent: (selection: ModelSelection) => { current = selection },
-    address: (id: SessionId) => { addressed.add(id) },
+    failNextModels: () => { failNextModels = true },
+    reconnect: (id: SessionId, generation: number) => {
+      const scope = scopes.get(id)
+      const session = scope === undefined ? undefined : sessionsByScope.get(scope)
+      if (session === undefined) throw new Error(`missing session ${String(id)}`)
+      session.handleGenerationStart(generation)
+      session.handleConnected(generation)
+    },
     setRoutable: (next: boolean) => { routable = next },
     blockOf: (key: string) => blocks.get(sid(key)),
   }
@@ -223,7 +262,7 @@ describe('ui-model-selection dual entry', () => {
     await face.select({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
     b.setHostCurrent({ provider: 'deepseek-official', model: 'deepseek-v4-flash' })
 
-    b.ctx.emit('connection/reset')
+    b.reconnect(sid('s1'), 1)
     expect(face.directory.getSnapshot()).toMatchObject({ current: null, status: 'loading' })
     await Promise.resolve()
     expect(face.directory.getSnapshot()).toMatchObject({
@@ -232,14 +271,31 @@ describe('ui-model-selection dual entry', () => {
     })
   })
 
-  it('scope disposal drops the directory; a reborn scope gets a fresh one', async () => {
+  it('scope disposal rebuilds the facade without duplicating the resident Session authority', async () => {
     const b = await bench()
     const first = b.mint('s1')
     const face1 = b.seat().inject!(sid('s1'))
     await first.fiber.dispose()
     b.mint('s1')
     const face2 = b.seat().inject!(sid('s1'))
-    expect(face2.directory).not.toBe(face1.directory)
+    expect(face2.directory).toBe(face1.directory)
+  })
+
+  it('turns an explicit load after an error into a fresh runtime read', async () => {
+    const b = await bench()
+    b.failNextModels()
+    b.mint('s1')
+    const face = b.seat().inject!(sid('s1'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(face.directory.getSnapshot().status).toBe('error')
+    expect(b.calls.models).toBe(1)
+
+    face.load()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(b.calls.models).toBe(2)
+    expect(face.directory.getSnapshot().status).toBe('ready')
   })
 
   it('blocks the composer only once the Host reports the route unservable', async () => {
@@ -287,8 +343,8 @@ describe('ui-model-selection dual entry', () => {
 
   it('clears its block when the session scope goes', async () => {
     const b = await bench()
-    const scope = b.mint('s1')
     b.setRoutable(false)
+    const scope = b.mint('s1')
     const face = b.seat().inject!(sid('s1'))
     face.load()
     await Promise.resolve()
@@ -306,8 +362,7 @@ describe('ui-model-selection dual entry', () => {
 
   it('withholds both model entries from addressed subagent sessions without Agent-bound RPCs', async () => {
     const b = await bench()
-    b.mint('child')
-    b.address(sid('child'))
+    b.mint('child', true)
 
     expect(b.contribution().available(projection('child'))).toBe(false)
     await expect(b.contribution().ui.options(
@@ -325,7 +380,7 @@ describe('ui-model-selection dual entry', () => {
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
     })).rejects.toThrow(/unavailable for addressed subagent/)
-    b.ctx.emit('connection/reset')
+    b.reconnect(sid('child'), 1)
     await Promise.resolve()
     expect(b.calls).toEqual({ models: 0, select: 0 })
   })

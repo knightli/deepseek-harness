@@ -5,7 +5,8 @@ import { createScope, scopeOf, SessionProvideChannel } from '@deepseek-ai/dsh-cl
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   AgentContext, ConversationSnapshot, ISessions, ObservableSnapshot, ProjectionsFace, SessionFace, SessionId,
-  SessionListState, SessionProvideDescriptor, SessionSearchResultItem, SessionSummary, SnapshotStore,
+  SessionListState, SessionModelDirectorySnapshot, SessionProvideDescriptor, SessionSearchResultItem,
+  SessionSummary, SnapshotStore,
   SubagentAddress,
 } from '@deepseek-ai/dsh-client-runtime/client'
 // The double reports the wire schema's own search bound, like the production
@@ -23,6 +24,17 @@ import type { SessionFixture, Stabilizer } from './fixtures.ts'
  * fixture methods are grafted verbatim for feature-side casts.
  */
 export class FixtureSession implements SessionFace {
+  /** Session-model authority fixture; behavior tests may override its verbs. */
+  readonly modelDirectory = createSnapshotStore<SessionModelDirectorySnapshot>({
+    current: null,
+    routable: null,
+    capabilities: undefined,
+    groups: [],
+    failures: [],
+    status: 'idle',
+    error: null,
+  })
+
   /**
    * The useProjection seat: identity-stable per-key faces over the fixture's
    * projection values (set via {@link TestSessions.setProjection}).
@@ -136,6 +148,21 @@ export class FixtureSession implements SessionFace {
    */
   rename(): never {
     throw new Error(`test session "${this.sessionId}": rename is not stubbed — supply it on the fixture's session face`)
+  }
+
+  /** Fail-loud stub; supply `loadModels` on the fixture's session face to exercise it. */
+  loadModels(): never {
+    throw new Error(`test session "${this.sessionId}": loadModels is not stubbed`)
+  }
+
+  /** Fail-loud stub; supply `refreshModels` on the fixture's session face to exercise it. */
+  refreshModels(): never {
+    throw new Error(`test session "${this.sessionId}": refreshModels is not stubbed`)
+  }
+
+  /** Fail-loud stub; supply `selectModel` on the fixture's session face to exercise it. */
+  selectModel(): never {
+    throw new Error(`test session "${this.sessionId}": selectModel is not stubbed`)
   }
 }
 

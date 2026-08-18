@@ -2,15 +2,15 @@
 
 [English](README.md) | 中文
 
-模型选择插件（浏览器侧）：**两个入口共用一份会话级目录**，由 `ModelDirectoryResolver`（`ctx.modelDirectories`）持有。对于普通会话，`/model` popupSelect 贡献项（经 `ctx.commandUi` 注册）与 composer 的具名 `conversation.input.model` slot 都通过同一个 `ModelDirectory` 实例，经 `session.models` 加载会话的建议目录，并经 `session.selectModel` 提交。紧凑型 composer 触发器会打开两级 Model/Effort 菜单：模型仍按提供方分组，所选具体模型则提供由其适配器持有的推理强度名称、说明和默认值。`/model` 应用所选模型的默认推理强度，composer 随后可以选择任一已公布的推理强度。
+模型选择插件（浏览器侧）：**两个入口共用一份由 runtime Session 持有的目录**。`ModelDirectoryResolver`（`ctx.modelDirectories`）只为每个会话创建薄 facade：`/model` popupSelect 贡献项（经 `ctx.commandUi` 注册）与 composer 的具名 `conversation.input.model` slot 订阅同一个 `Session.modelDirectory` observable，并把 `loadModels`／`refreshModels`／`selectModel` 委托给该 Session。本插件不保留第二份 groups／current／routable store，也不直接发出 wire RPC。紧凑型 composer 触发器会打开两级 Model/Effort 菜单：模型仍按提供方分组，所选具体模型则提供由其适配器持有的推理强度名称、说明和默认值。`/model` 应用所选模型的默认推理强度，composer 随后可以选择任一已公布的推理强度。
 
-Host 报告的 `ModelSelection` 是唯一的选择事实，其中包含提供方、模型与推理（reasoning）强度；但只有当该提供方／模型对仍在已公布分组中时才会回显。目录行缺席时，可路由的选择保持不变，但触发器会提示 `Select model`；系统不会合成陈旧行，且在用户选择已公布的模型之前不会显示 Effort 行。目录加载与选择共享一个代次计数器，旧响应不会覆盖新结果；连接重置会丢弃所有常驻目录投影，并在显示前重新拉取 Host 恢复的选择。各提供方的元数据获取失败会内联列出，同时可用分组仍可选择；选择失败会保留先前的选择和目录。
+Host 报告的 `ModelSelection` 是唯一的选择事实，其中包含提供方、模型与推理（reasoning）强度；但只有当该提供方／模型对仍在已公布分组中时才会回显。目录行缺席时，可路由的选择保持不变，但触发器会提示 `Select model`；系统不会合成陈旧行，且在用户选择已公布的模型之前不会显示 Effort 行。runtime 的 request identity 与 connection generation 会阻止旧响应覆盖新结果；断连会同步撤回目录，重连则在显示前重新加载 Host 恢复的选择。各提供方的元数据获取失败会内联列出，同时可用分组仍可选择；选择失败会保留先前的选择和目录。
 
 当 Host 报告 `session.models.routable: false` 时，本插件经 `ctx.conversation.blocks` 注册一个 composer 阻塞块，输入框随之停用并显示本插件自己的文案；恢复后无需重新加载即自动清除。该值跟随 Host 对普通文本的准入，而不只表示适配器是否存在：DSH 适配器服务所选提供方，或实时 Agent 声明 `promptExecution: { kind: 'external-text' }` 时，该值均为 `true`。插件只跟随 `routable`：`null`（首次加载之前，或加载失败之后）绝不阻断，否则一个缓慢的 Host 会锁死本来可用的 composer；目录成员关系同样不阻断。对于 `external-text` Agent，目录只用于兼容显示；`session.selectModel` 返回 `model-unavailable`，目录则保留先前的选择和分组。触发器自己的 `Select model` 回退仍然只是显示，不决定提示词准入（[决策](../../../.agents/notes/implemented/architecture/2026-08-14-external-text-prompt-execution.md)）。
 
-目录按会话惰性解析（`ctx.modelDirectories.directoryFor(sessionId)`），随会话作用域一并 dispose（资源释放）。已寻址 subagent 会话不公开任一入口，其目录会拒绝加载、选择与重新连接刷新，因为绑定到 agent（智能体）的普通模型 RPC 会在直接 parent 继续执行路径之外激活持久化 child 历史。
+facade 按会话惰性解析（`ctx.modelDirectories.directoryFor(sessionId)`），随会话作用域一并 dispose（资源释放）；底层权威仍保留在常驻 runtime Session 上。已寻址 subagent 会话不公开任一入口，Session 会拒绝加载、选择与重连刷新，且不发出绑定普通 Agent 的模型 RPC，因为该 transport 会在直接 parent 继续执行路径之外激活持久化 child 历史。
 
-每一份常驻目录都会直接在转发的 owner 事件 `llm/adapters-updated` 与 `settings/document-updated` 上重拉。因此提供方拓扑、提供方目录与默认选择都能收敛，Host 与 client runtime 无需再派生一个单独的模型变更别名。
+转发的 owner 事件 `llm/adapters-updated` 与 `settings/document-updated` 会显式刷新每个常驻 Session 权威。因此提供方拓扑、提供方目录与默认选择都能收敛，Host 与 client runtime 无需再派生一个单独的模型变更别名。
 
 `/client` 导出面为插件本体（`apply`/`inject`）、`ModelDirectoryResolver`、`ModelDirectory` 及其状态形状、slot 注入面类型。
 

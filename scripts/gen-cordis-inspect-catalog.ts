@@ -1,6 +1,6 @@
 /** Generate model-visible Host/Client Service and Event inspect catalogs. */
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { projectCordisCatalog } from '@deepseek-ai/dsh-typert-generator'
 import type { CordisCatalogModel, ServiceMethodEntry } from '@deepseek-ai/dsh-typert-generator'
@@ -49,6 +49,19 @@ function main(): void {
   const destination = resolve(root, CLIENT_OUT)
   const source = projector.renderRuntimeApi(clientModel(model))
     .replaceAll('@deepseek-ai/dsh-tool-cordis/api-catalog', '@deepseek-ai/dsh-cordis-client-runner/client/api-catalog')
+  if (process.argv.includes('--check')) {
+    let committed = ''
+    try {
+      committed = readFileSync(destination, 'utf8')
+    } catch {
+      throw new Error(`gen-cordis-inspect-catalog: missing ${CLIENT_OUT}; run pnpm run gen-cordis-inspect-catalog`)
+    }
+    if (committed !== source) {
+      throw new Error(`gen-cordis-inspect-catalog: stale ${CLIENT_OUT}; run pnpm run gen-cordis-inspect-catalog`)
+    }
+    console.log(`gen-cordis-inspect-catalog: verified ${CLIENT_OUT}`)
+    return
+  }
   mkdirSync(dirname(destination), { recursive: true })
   writeFileSync(destination, source)
   console.log(`gen-cordis-inspect-catalog: wrote ${CLIENT_OUT}`)

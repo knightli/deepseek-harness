@@ -76,7 +76,9 @@ reason 为 `max-tokens` 的 `turn/end` 会在该轮位置投影出一个 `turn-m
 
 ## 会话模型选择
 
-每个常驻 `Session` 都拥有一个 `modelSelection` 快照，其中包含当前模型选择、按提供方分组的目录、逐提供方失败记录，以及 `idle`／`loading`／`ready`／`selecting`／`error` 状态。历史记录会建立或刷新当前模型选择，打开选择器会刷新目录；选择失败会保留上一次模型选择和可用分组。目录与选择操作共用单调递增的代次，因此较旧响应无法覆盖较新的模型选择。重连重建会恢复 Host 报告的模型选择，同时不替换未变化的选择子结构。
+每个常驻的普通 `Session` 都持有唯一的 `modelDirectory` observable，其中包含当前 `ModelSelection`、`routable`、操作能力、提供方分组、逐提供方失败记录，以及 `idle`／`loading`／`ready`／`selecting`／`error` 生命周期。ready connection generation 中的第一个消费者发起 `session.models`；其他消费者加入同一个 promise 或复用其已结算结果，因此能力控制项与 stock 模型选择器不会从重复读取建立错时投影。`ConversationSnapshot.sessionCapabilities` 派生自同一权威，而 `loadModels`、由 owner 事件显式触发的 `refreshModels` 与 `selectModel` 构成 Session 的完整变更边界。模型选择插件仅通过薄 facade 订阅，不保留第二份 groups／current／routable store。
+
+断连与 generation start 会同步撤回目录和 `sessionCapabilities`，使 pending 读取与选择失效，并以 request identity、connection generation、answerable generation 及普通会话地址拦截所有迟到结算。重连只为新 generation 发起一次读取。切换为已寻址 subagent 会清空该权威，且绝不调用绑定普通 Agent 的模型 RPC；切回可响应的普通会话时重新加载。adapter topology 与 settings 的 owner 事件会显式刷新 Session 权威；选择失败则保留上一次成功目录，同时报告本次操作错误。
 
 ## 模型体验
 

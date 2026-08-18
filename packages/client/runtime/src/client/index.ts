@@ -53,7 +53,9 @@ export type {
   SettingsScope, SettingsScopeSnapshot, SettingsScopeSpec,
 } from './contract/settings-scope.ts'
 export type { Session } from './sessions/session.ts'
-export type { ISession, ProjectionsFace, SessionFace } from './contract/session.ts'
+export type {
+  ISession, ProjectionsFace, SessionFace, SessionModelDirectorySnapshot,
+} from './contract/session.ts'
 export type { AgentContext, ISessions } from './contract/sessions.ts'
 export type { IWorkspaces } from './contract/workspaces.ts'
 export type {

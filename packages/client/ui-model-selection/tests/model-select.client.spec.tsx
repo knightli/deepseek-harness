@@ -33,6 +33,7 @@ function state(overrides: Partial<ModelDirectoryState> = {}): ModelDirectoryStat
   return {
     current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
     routable: true,
+    capabilities: undefined,
     groups: [{
       id: 'deepseek-official',
       name: 'DeepSeek',

@@ -4,14 +4,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type {
-  HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
-  RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
+  HistoryEntry, IApiClient, MessageId, ModelSelection, MuxFrame, PromptContentPart, QueueAction,
+  RpcError, RpcId, RpcResponse, RpcResult, SessionId, SessionModels, SubagentAddress, ToolEventView,
 } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SessionCapabilities } from '@deepseek-ai/dsh-client-connection/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
-import type { SessionFace } from '../contract/session.ts'
+import type { SessionFace, SessionModelDirectorySnapshot } from '../contract/session.ts'
+import type { ObservableSnapshot } from '../contract/store.ts'
 import { ConversationNodeAssembler } from './conversation-assembler.ts'
 import type { ConversationRuntime } from './conversation-assembler.ts'
 import type { ConversationEventInput, ConversationPublication } from '../contract/conversation.ts'
@@ -31,6 +31,16 @@ import { SessionQueueMirror } from './queue-mirror.ts'
 
 /** Messages requested per history page. */
 export const PAGE_MESSAGES = 50
+
+const EMPTY_MODEL_DIRECTORY: SessionModelDirectorySnapshot = {
+  current: null,
+  routable: null,
+  capabilities: undefined,
+  groups: [],
+  failures: [],
+  status: 'idle',
+  error: null,
+}
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {
@@ -90,12 +100,15 @@ export class Session implements SessionFace {
   private connectionGeneration = 0
   /** The sole generation whose interaction responses may reach the carrier. */
   private answerableGeneration: number | null = 0
-  /** Fail-closed operation support for the current ready connection generation. */
-  private sessionCapabilities: SessionCapabilities | undefined
-  /** Generation already read, so duplicate readiness signals cannot duplicate the RPC. */
-  private capabilityRequestedGeneration: number | null = null
-  /** Request identity fence; generation start invalidates an older in-flight response. */
-  private capabilityRequestNonce = 0
+  /** One SessionModels-derived authority shared by capability and model-selection consumers. */
+  private modelDirectorySnapshot: SessionModelDirectorySnapshot = EMPTY_MODEL_DIRECTORY
+  /** Settled result for the current generation; explicit owner invalidation replaces it. */
+  private modelResult: RpcResult<SessionModels> | undefined
+  private modelResultGeneration: number | null = null
+  /** One in-flight read for the current generation; every consumer joins it. */
+  private modelRequest: { generation: number; promise: Promise<RpcResult<SessionModels>> } | null = null
+  /** Latest model operation wins and generation teardown fences every late settlement. */
+  private modelRequestNonce = 0
   /** Authoritative stream-only inbox snapshot; pending work never hits history. */
   private readonly queueMirror = new SessionQueueMirror()
   /** Session-owned business Context engine over the contiguous raw window. */
@@ -137,6 +150,12 @@ export class Session implements SessionFace {
    */
   readonly projections: ProjectionValueStore
 
+  /** Read-only observable over the Session-owned model directory authority. */
+  readonly modelDirectory: ObservableSnapshot<SessionModelDirectorySnapshot> = {
+    getSnapshot: () => this.modelDirectorySnapshot,
+    subscribe: listener => this.subscribe(listener),
+  }
+
   private snapshotCache: ConversationSnapshot
   private readonly notifier: Notifier
   /**
@@ -176,8 +195,8 @@ export class Session implements SessionFace {
       this.snapshotCache = this.buildSnapshot()
     })
     this.snapshotCache = this.buildSnapshot()
-    if (this.answerableGeneration !== null) {
-      void this.loadSessionCapabilities(this.connectionGeneration)
+    if (this.answerableGeneration !== null && this.address === undefined) {
+      void this.loadModels()
     }
   }
 
@@ -299,6 +318,61 @@ export class Session implements SessionFace {
     } catch (error) {
       return transportError(error)
     }
+  }
+
+  /** Read or join the current ready generation's authoritative SessionModels result. */
+  loadModels(): Promise<RpcResult<SessionModels>> {
+    return this.readModels(false)
+  }
+
+  /** Explicit owner-event invalidation of the SessionModels authority. */
+  refreshModels(): Promise<RpcResult<SessionModels>> {
+    return this.readModels(true)
+  }
+
+  /** Select one complete model route and settle the shared directory projection. */
+  async selectModel(selection: ModelSelection): Promise<RpcResult<{ selected: ModelSelection }>> {
+    if (this.address !== undefined || this.answerableGeneration === null) return this.modelUnavailable()
+    const generation = this.connectionGeneration
+    const requestNonce = ++this.modelRequestNonce
+    this.modelRequest = null
+    this.modelResult = undefined
+    this.modelResultGeneration = null
+    this.modelDirectorySnapshot = {
+      ...this.modelDirectorySnapshot,
+      status: 'selecting',
+      error: null,
+    }
+    this.notifier.markDirty()
+    let result: RpcResult<{ selected: ModelSelection }>
+    try {
+      result = (await this.api.sessions.selectModel({
+        sessionId: this.sessionId,
+        provider: selection.provider,
+        model: selection.model,
+        ...selection.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: selection.reasoningEffort },
+      })).result
+    } catch (error) {
+      result = transportError(error)
+    }
+    if (!this.isCurrentModelOperation(generation, requestNonce)) return result
+    this.modelDirectorySnapshot = result.ok
+      ? {
+        ...this.modelDirectorySnapshot,
+        current: result.value.selected,
+        routable: true,
+        status: 'ready',
+        error: null,
+      }
+      : {
+        ...this.modelDirectorySnapshot,
+        status: 'error',
+        error: `${result.error.code}: ${result.error.message}`,
+      }
+    this.notifier.markDirty()
+    return result
   }
 
   /** Apply one operation to a still-pending queue occurrence. */
@@ -501,17 +575,13 @@ export class Session implements SessionFace {
   handleGenerationStart(generation: number): void {
     this.connectionGeneration = generation
     this.answerableGeneration = null
-    this.capabilityRequestNonce++
-    this.capabilityRequestedGeneration = null
-    if (this.sessionCapabilities !== undefined) {
-      this.sessionCapabilities = undefined
-      this.notifier.markDirty()
-    }
+    this.clearModelDirectory()
   }
 
   /** Preserve visible waits while making every retained carrier locally unavailable. */
   handleDisconnected(): void {
     this.answerableGeneration = null
+    this.clearModelDirectory()
   }
 
   /**
@@ -521,7 +591,7 @@ export class Session implements SessionFace {
   handleConnected(generation: number): void {
     if (generation !== this.connectionGeneration) return
     this.answerableGeneration = generation
-    void this.loadSessionCapabilities(generation)
+    if (this.address === undefined) void this.loadModels()
     void this.resync(generation)
   }
 
@@ -617,6 +687,10 @@ export class Session implements SessionFace {
       && this.address?.mode === address?.mode
     this.address = address
     this.parentAvailable = parentAvailable
+    if (!same) {
+      this.clearModelDirectory()
+      if (address === undefined && this.answerableGeneration !== null) void this.loadModels()
+    }
     if (!same && this.openState !== 'cold') void this.resync()
     else this.notifier.markDirty()
   }
@@ -821,7 +895,7 @@ export class Session implements SessionFace {
     const legacy = chat.legacy
     return {
       sessionId: this.sessionId,
-      sessionCapabilities: this.sessionCapabilities,
+      sessionCapabilities: this.modelDirectorySnapshot.capabilities,
       views: this.conversation,
       chat,
       nodes: legacy.nodes,
@@ -853,23 +927,103 @@ export class Session implements SessionFace {
     }
   }
 
-  /** Read operation support once for a ready generation and fence late responses. */
-  private async loadSessionCapabilities(generation: number): Promise<void> {
-    if (this.capabilityRequestedGeneration === generation) return
-    this.capabilityRequestedGeneration = generation
-    const requestNonce = ++this.capabilityRequestNonce
-    try {
-      const { result } = await this.api.sessions.models({ sessionId: this.sessionId })
-      if (
-        !result.ok
-        || requestNonce !== this.capabilityRequestNonce
-        || generation !== this.connectionGeneration
-        || generation !== this.answerableGeneration
-      ) return
-      this.sessionCapabilities = result.value.capabilities
-      this.notifier.markDirty()
-    } catch {
-      // Transport failures are capability absence for this generation.
+  /** Read SessionModels through the one per-generation authority; explicit refresh invalidates it first. */
+  private readModels(refresh: boolean): Promise<RpcResult<SessionModels>> {
+    if (this.address !== undefined || this.answerableGeneration === null) {
+      return Promise.resolve(this.modelUnavailable())
+    }
+    const generation = this.connectionGeneration
+    if (refresh) this.invalidateModelRequest()
+    if (this.modelResultGeneration === generation && this.modelResult !== undefined) {
+      return Promise.resolve(this.modelResult)
+    }
+    if (this.modelRequest?.generation === generation) return this.modelRequest.promise
+    const requestNonce = ++this.modelRequestNonce
+    this.modelDirectorySnapshot = {
+      ...this.modelDirectorySnapshot,
+      status: 'loading',
+      error: null,
+    }
+    this.notifier.markDirty()
+    const promise = this.api.sessions.models({ sessionId: this.sessionId })
+      .then(({ result }) => {
+        if (!this.isCurrentModelOperation(generation, requestNonce)) return result
+        this.modelResult = result
+        this.modelResultGeneration = generation
+        this.modelDirectorySnapshot = result.ok
+          ? {
+            current: result.value.current,
+            routable: result.value.routable,
+            capabilities: result.value.capabilities,
+            groups: result.value.groups,
+            failures: result.value.failures,
+            status: 'ready',
+            error: null,
+          }
+          : {
+            ...this.modelDirectorySnapshot,
+            status: 'error',
+            error: `${result.error.code}: ${result.error.message}`,
+          }
+        this.notifier.markDirty()
+        return result
+      }, (error: unknown) => {
+        const result = transportError<SessionModels>(error)
+        if (result.ok) return result
+        if (this.isCurrentModelOperation(generation, requestNonce)) {
+          this.modelResult = result
+          this.modelResultGeneration = generation
+          this.modelDirectorySnapshot = {
+            ...this.modelDirectorySnapshot,
+            status: 'error',
+            error: `${result.error.code}: ${result.error.message}`,
+          }
+          this.notifier.markDirty()
+        }
+        return result
+      })
+      .finally(() => {
+        if (this.modelRequest?.promise === promise) this.modelRequest = null
+      })
+    this.modelRequest = { generation, promise }
+    return promise
+  }
+
+  /** Fence every model operation and retract all generation-owned model facts. */
+  private clearModelDirectory(): void {
+    this.invalidateModelRequest()
+    if (this.modelDirectorySnapshot === EMPTY_MODEL_DIRECTORY) return
+    this.modelDirectorySnapshot = EMPTY_MODEL_DIRECTORY
+    this.notifier.markDirty()
+  }
+
+  /** Invalidate the current read/result without publishing a replacement snapshot. */
+  private invalidateModelRequest(): void {
+    this.modelRequestNonce++
+    this.modelRequest = null
+    this.modelResult = undefined
+    this.modelResultGeneration = null
+  }
+
+  /** Whether an async model settlement still owns the ordinary ready Session. */
+  private isCurrentModelOperation(generation: number, requestNonce: number): boolean {
+    return requestNonce === this.modelRequestNonce
+      && generation === this.connectionGeneration
+      && generation === this.answerableGeneration
+      && this.address === undefined
+  }
+
+  /** Stable fail-closed result for addressed or disconnected model operations. */
+  private modelUnavailable<T>(): RpcResult<T> {
+    return {
+      ok: false,
+      error: {
+        code: 'internal',
+        message: this.address === undefined
+          ? 'model selection is unavailable while the session is disconnected'
+          : 'model selection is unavailable for addressed subagent sessions',
+        details: {},
+      },
     }
   }
 

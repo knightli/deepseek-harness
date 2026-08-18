@@ -83,6 +83,12 @@ describe('gate graph validation', () => {
     expect(ids).toContain('public-repository-links')
   })
 
+  it('freshness-gates the model-visible client service catalog', () => {
+    const ids = withPnpmEntrypoint(() => gatesForMode('doc-sync').map(subject => subject.id))
+
+    expect(ids).toContain('cordis-inspect-catalog')
+  })
+
   it.each(['ci-primary', 'ci-static', 'check-all'] as const)(
     'keeps the DSH package license policy in %s',
     (mode) => {
