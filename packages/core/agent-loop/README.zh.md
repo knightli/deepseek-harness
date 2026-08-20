@@ -20,7 +20,7 @@ agent（智能体）的唯一具体实现插件和循环驱动器。其包内部
 
 `AgentLoop` 还实现 `AgentFactory` 约定，并通过 `ctx.agents.setFactory(this)` 注册自身，因此插件会通过 `ctx.agents` 创建／恢复 agent：
 
-它的工厂声明会设置 `sessionCapabilities.forkFromSeed: true`：`createAgent()` 路径会验证并快照传入的 seed，因此 Host 可以如实允许普通 Session fork，而不必依赖隐式默认值。编程式创建与恢复会在注册表的工厂调用内发布；声明式 `sessionId` 创建和 `resumeSessionId` 恢复在直接发布时则会标识这一精确的已注册工厂，因此两条路径都会在实时条目上保留同一声明。
+它的工厂声明会设置 `sessionCapabilities.forkFromSeed: true`：`createAgent()` 路径会验证并快照传入的 seed，因此 Host 可以如实允许普通 Session fork，而不必依赖隐式默认值。AgentLoop 会在每次创建、恢复或恢复后回退创建的操作入口捕获 `setFactory()` 返回的确切可调用凭据，并跨 setup 与持久化 await 保留它。编程式发布还必须匹配注册表环境中的调用；声明式 `sessionId` 创建和 `resumeSessionId` 恢复则会直接提供捕获的凭据，因此两条路径都会在实时条目上保留同一注册快照，并拒绝替换后迟到的发布。
 
 - `ctx.agents.create({ sessionId, meta?, seed?, agentOptions?, setup?, signal? }): Promise<AgentHandle>`：使用调用方提供的共享 id 以编程方式创建。它会等待尚未发布的 setup 事务，然后才返回；`meta` 携带 cwd／谱系／seed 边界元数据，`seed` 则在会话边界验证并快照持久值后，重建 fork 子级的前缀。`signal` 只在此 Promise 结算前生效。返回的 [`AgentHandle`](../agent/README.md) 拥有确切的 teardown 能力。
 - `ctx.agents.resume({ resumeSessionId, agentOptions?, setup?, signal? }): Promise<AgentHandle>`：通过 `ctx.sessionPersistence` 加载持久化会话（参见[会话持久化](../../../.agents/notes/implemented/architecture/2026-06-14-session-persistence.md)），使用同一 id 注册 agent，重建历史，然后针对全新且尚未发布的 agent 作用域等待 setup，再执行受回滚保护的发布。轮次编号和派生历史从已加载日志继续。此操作要求存在会话持久化后端（不会硬注入，因此非持久化 demo 仍能工作；缺少持久化时，`resume` 会以明确错误拒绝）。`signal` 仅用于创建。返回 `AgentHandle`。

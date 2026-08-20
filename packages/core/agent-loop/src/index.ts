@@ -5,13 +5,14 @@
  * @module @deepseek-ai/dsh-agent-loop
  */
 
-import { Context, FiberState, Service } from '@deepseek-ai/cordis'
+import { Context, FiberState, Service, symbols } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
 import { emitAgentEvent } from '@deepseek-ai/dsh-agent'
 import type {
   Agent,
   AgentFactory,
+  AgentFactoryRegistration,
   AgentFactorySessionCapabilities,
   AgentHandle,
   AgentOptions,
@@ -293,6 +294,18 @@ function validateConfiguredAgents(agents: Config['agents']): void {
   }
 }
 
+/** Registry receipts keyed outside the traced Service object. */
+const factoryRegistrations = new WeakMap<AgentLoop, AgentFactoryRegistration>()
+
+/** Read the registry-minted publication receipt without exposing it on the Service object. */
+function factoryRegistration(loop: AgentLoop): AgentFactoryRegistration {
+  const target = (loop as AgentLoop & { [symbols.original]?: AgentLoop })[symbols.original] ?? loop
+  const registration = factoryRegistrations.get(target)
+  /* v8 ignore next -- construction stores the receipt before any operation can observe the service. */
+  if (registration === undefined) throw new Error('agent loop factory registration is unavailable')
+  return registration
+}
+
 /** Concrete agent factory and driver service. */
 export class AgentLoop extends Service implements AgentFactory {
   static inject = ['agents', 'sessions', 'llm', 'tools', 'systemPrompt']
@@ -351,7 +364,11 @@ export class AgentLoop extends Service implements AgentFactory {
     this.ownership = new FactoryOwnership(ctx.fiber)
     this.runtime = { ctx }
     ctx.effect(() => () => this.ownership.dispose(), 'agentLoop.transactions()')
-    ctx.effect(() => ctx.agents.setFactory(this), 'agentLoop.setFactory()')
+    ctx.effect(() => {
+      const registration = ctx.agents.setFactory(this)
+      factoryRegistrations.set(this, registration)
+      return registration
+    }, 'agentLoop.setFactory()')
     ctx.systemPrompt.variable('provider', context => context.agent?.options.provider)
     ctx.systemPrompt.variable('model', context => context.agent?.options.model)
     ctx.systemPrompt.variable('cwd', context => context.agent?.session.header.cwd)
@@ -415,10 +432,11 @@ export class AgentLoop extends Service implements AgentFactory {
     agentOptions: AgentOptions,
     meta: Pick<SessionHeader, 'cwd'>,
   ): Promise<void> {
+    const registration = factoryRegistration(this)
     await this.waitForDrainingConfiguredIdentity(ownerCtx, sessionId)
     if (!this.ownership.isActive()) return
     try {
-      await this.resumeWith(ownerCtx, persistence, { resumeSessionId: sessionId, agentOptions })
+      await this.resumeWith(ownerCtx, persistence, { resumeSessionId: sessionId, agentOptions }, registration)
       return
     } catch (error: unknown) {
       if (!this.ownership.isActive()) return
@@ -428,7 +446,7 @@ export class AgentLoop extends Service implements AgentFactory {
       const exists = (await persistence.list()).some(header => header.id === sessionId)
       if (exists) throw error
     }
-    this.create(sessionId, agentOptions, meta)
+    this.createWithRegistration(registration, sessionId, agentOptions, meta)
   }
 
   /** Wait for a draining same-id lifecycle to finish registry teardown. */
@@ -460,7 +478,14 @@ export class AgentLoop extends Service implements AgentFactory {
    * BEFORE publication, so a mid-setup unload rolls everything back; `signal`
    * fuses caller cancellation with lifecycle teardown for setup awaits.
    */
-  private prepare(ownerCtx: Context, id: SessionId, options: AgentOptions, session: Session, callerSignal?: AbortSignal): PreparedAgent {
+  private prepare(
+    ownerCtx: Context,
+    id: SessionId,
+    options: AgentOptions,
+    session: Session,
+    registration: AgentFactoryRegistration,
+    callerSignal?: AbortSignal,
+  ): PreparedAgent {
     assertAgentOptions(options)
     ownerCtx.fiber.assertActive()
     // Every caller reaches prepare() synchronously from a service method
@@ -560,7 +585,7 @@ export class AgentLoop extends Service implements AgentFactory {
         publish: (source) => {
           assertLive()
           detachSession = agent.ctx.sessions.enter(session)
-          detachAgent = loopCtx.agents.enter(agent, ownerCtx.agent, this)
+          detachAgent = loopCtx.agents.enter(agent, ownerCtx.agent, registration)
           agent.ctx.sessions.announce(session)
           assertLive()
           loopCtx.agents.announce(agent)
@@ -591,8 +616,18 @@ export class AgentLoop extends Service implements AgentFactory {
    * @returns the published running agent.
    */
   create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, 'cwd'> = {}): Agent {
+    return this.createWithRegistration(factoryRegistration(this), id, options, meta)
+  }
+
+  /** Create a direct agent using the registration captured at operation entry. */
+  private createWithRegistration(
+    registration: AgentFactoryRegistration,
+    id: SessionId,
+    options: AgentOptions,
+    meta: Pick<SessionHeader, 'cwd'>,
+  ): Agent {
     using preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, { meta }))
-    const prepared = this.prepare(this.ctx, id, options, preparation.session)
+    const prepared = this.prepare(this.ctx, id, options, preparation.session, registration)
     try {
       return prepared.publish('startup').agent
     } catch (error: unknown) {
@@ -608,6 +643,7 @@ export class AgentLoop extends Service implements AgentFactory {
    * @returns the published handle.
    */
   async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> {
+    const registration = factoryRegistration(this)
     const preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(options.sessionId, {
       ...options.seed === undefined ? {} : { seed: options.seed },
       ...options.meta === undefined ? {} : { meta: options.meta },
@@ -620,6 +656,7 @@ export class AgentLoop extends Service implements AgentFactory {
       options.setup,
       options.signal,
       'startup',
+      registration,
     )
     this.ownership.trackWrapper(published)
     return published
@@ -634,10 +671,11 @@ export class AgentLoop extends Service implements AgentFactory {
     setup: AgentSetup | undefined,
     signal: AbortSignal | undefined,
     source: SessionStartSource,
+    registration: AgentFactoryRegistration,
   ): Promise<AgentHandle> {
     using ownedPreparation = preparation
     const session = ownedPreparation.session
-    const prepared = this.prepare(ownerCtx, id, agentOptions, session, signal)
+    const prepared = this.prepare(ownerCtx, id, agentOptions, session, registration, signal)
     try {
       const setupCommit = await raceAbort(setup?.(prepared.agent.ctx), prepared.signal, id)
       setupCommit?.commit()
@@ -667,6 +705,7 @@ export class AgentLoop extends Service implements AgentFactory {
     ownerCtx: Context,
     persistence: SessionPersistence,
     options: ResumeAgentOptions,
+    registration = factoryRegistration(this),
   ): Promise<AgentHandle> {
     const id = options.resumeSessionId
     const published = (async () => {
@@ -704,6 +743,7 @@ export class AgentLoop extends Service implements AgentFactory {
           options.setup,
           options.signal,
           'resume',
+          registration,
         )
       } finally {
         preparation?.[Symbol.dispose]()

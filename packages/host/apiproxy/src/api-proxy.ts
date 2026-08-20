@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { AgentFactoryCapabilityUnavailableError, installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentSetup, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
@@ -2554,6 +2554,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             setup: forkComposition.setup,
           })
         } catch (error: unknown) {
+          // Keep this wire mapping scoped if the typed error gains capabilities.
+          // oxlint-disable-next-line typescript/no-unnecessary-condition
+          if (error instanceof AgentFactoryCapabilityUnavailableError && error.capability === 'forkFromSeed') {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: 'fork is unavailable for this session',
+              details: { sessionId },
+            })
+          }
           return err(request, {
             code: 'internal',
             message: `failed to fork session "${sessionId}": ${String(error)}`,

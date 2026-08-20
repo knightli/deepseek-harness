@@ -254,20 +254,21 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['when the initiator scope is closing/disposed, or when `operation` throws.'],
       },
       {
-        signature: 'setFactory(factory: AgentFactory): () => void',
-        description: 'Register the agent-creation factory (the loop calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Throws if a factory is already registered. Returns the disposer; on dispose the factory slot is cleared.',
+        signature: 'setFactory(factory: AgentFactory): AgentFactoryRegistration',
+        description: 'Register the agent-creation factory (the loop calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Its session capabilities are snapshotted for this exact registration. Throws if a factory is already registered. Returns the disposer; on dispose the factory slot is cleared.',
         parameters: [{ name: 'factory', description: 'the loop-owned factory {@link create}/{@link resume} delegate to.' }],
-        returns: 'the disposer that clears the factory slot. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
+        returns: 'the registration receipt that clears the factory slot. It is the exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order. The registry also accepts only this opaque value for direct publication.',
       },
       {
         signature: 'async create(options: CreateAgentOptions): Promise<AgentHandle>',
-        description: 'Create and publish a new agent through the registered factory. Distinct from register (which records an already-constructed agent): this constructs the agent and its session. Rejects if no factory is registered or creation/setup fails. The resolved AgentHandle lets the owner tear down exactly this agent.',
+        description: 'Create and publish a new agent through the registered factory. Distinct from register (which records an already-constructed agent): this constructs the agent and its session. Rejects if no factory is registered or creation/setup fails. The resolved AgentHandle lets the owner tear down exactly this agent. Ambient publication authority ends when this returned Promise settles, and a replaced registration rejects every retained continuation before it can enter the registry.',
         parameters: [{ name: 'options', description: 'shared identity, session seed/metadata, and agent options.' }],
         returns: 'the handle after setup, rollback-covered publication, and loop start complete.',
+        throws: ['{@link AgentFactoryCapabilityUnavailableError} when a seeded create\'s captured factory registration does not declare `forkFromSeed: true`.'],
       },
       {
         signature: 'async resume(options: ResumeAgentOptions): Promise<AgentHandle>',
-        description: 'Load a persisted session and resume an agent on it through the registered factory. Rejects if no factory is registered; the factory rejects if session persistence is not configured or persistence/setup fails.',
+        description: 'Load a persisted session and resume an agent on it through the registered factory. Rejects if no factory is registered; the factory rejects if session persistence is not configured or persistence/setup fails. Ambient publication authority ends when this returned Promise settles, and a replaced registration rejects every retained continuation before entry.',
         parameters: [{ name: 'options', description: 'persisted identity, configuration, and optional setup.' }],
         returns: 'the handle after setup, rollback-covered publication, and loop start complete.',
       },
@@ -278,11 +279,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the EXACT Cordis effect disposer (single-shot; a repeat call returns undefined without awaiting an in-flight teardown). Exact identity is load-bearing: a composite (generator) effect that owns a teardown ORDER — the agent factory\'s lifecycle chain — must yield THIS function so Cordis nests the unregistration at that yield position; yielding a wrapper would leave it disposing as a concurrent sibling on owner unload, unregistering the agent (and emitting `agent/disposed`) while its final turn is still draining.',
       },
       {
-        signature: 'enter(agent: Agent, owner: Agent | undefined, publisher?: AgentFactory): () => void',
+        signature: 'enter(agent: Agent, owner: Agent | undefined, publication?: AgentFactoryRegistration): () => void',
         description: 'Insert an already-constructed agent without announcing it. This is the advanced ordered-lifecycle primitive used by the async agent factory and by a registered factory\'s direct declarative publication. Setup finishes while the agent is unpublished, then the caller installs the returned detach closure before calling announce. Ordinary callers use register.',
-        parameters: [{ name: 'agent', description: 'the prepared, unpublished agent.' }, { name: 'owner', description: 'live agent whose scoped context created this agent, or undefined for a top-level runtime root. This is runtime ownership, not the resumed session\'s durable parent lineage.' }, { name: 'publisher', description: 'registered factory directly publishing this agent. The exact canonical factory identity must still own the registry slot; omission captures only a surrounding {@link create}/{@link resume} call.' }],
+        parameters: [{ name: 'agent', description: 'the prepared, unpublished agent.' }, { name: 'owner', description: 'live agent whose scoped context created this agent, or undefined for a top-level runtime root. This is runtime ownership, not the resumed session\'s durable parent lineage.' }, { name: 'publication', description: 'opaque receipt for the exact factory registration directly publishing this agent; omission captures only a surrounding {@link create}/{@link resume} call.' }],
         returns: 'an idempotent closure that removes this exact entry and emits `agent/disposed` with listener failures contained. When called from a synchronous `agent/created` listener, removal and disposal wait until that creation dispatch unwinds.',
-        throws: ['when ids differ, the id is occupied, or `publisher` is not the exact registered factory.'],
+        throws: ['when ids differ, the id is occupied, or the ambient/direct factory registration is not the exact active slot.'],
       },
       {
         signature: 'announce(agent: Agent): void',
@@ -2648,6 +2649,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AgentFactory',
     declaration: 'export interface AgentFactory {\n    readonly sessionCapabilities?: AgentFactorySessionCapabilities;\n    createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>;\n    resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>;\n}',
+  },
+  {
+    name: 'AgentFactoryRegistration',
+    declaration: 'export type AgentFactoryRegistration = (() => void) & {\n    readonly [agentFactoryRegistrationBrand]: true;\n};',
   },
   {
     name: 'AgentFactorySessionCapabilities',

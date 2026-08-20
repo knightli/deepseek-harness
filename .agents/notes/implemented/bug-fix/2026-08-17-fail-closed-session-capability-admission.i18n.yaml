@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-17-fail-closed-session-capability-admission.md
-2026-08-17-fail-closed-session-capability-admission.md: 93dd628cab79b743e328711339a67234cf338cef
-2026-08-17-fail-closed-session-capability-admission.zh.md: 095cd9760ebd00cfb84f616ce753dfe1f59cf08f
+2026-08-17-fail-closed-session-capability-admission.md: a59b15d328a49df7b99de08e54b7b4e63b23534a
+2026-08-17-fail-closed-session-capability-admission.zh.md: 80d5a0bbb0b9431fc34af18cd6f37da5d5bc854e

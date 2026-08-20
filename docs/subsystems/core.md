@@ -383,7 +383,7 @@ async resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandl
 
 Types: [SessionHeader](persistence.md)
 
-Source: [`packages/core/agent-loop/src/index.ts:297`](../../packages/core/agent-loop/src/index.ts)
+Source: [`packages/core/agent-loop/src/index.ts:309`](../../packages/core/agent-loop/src/index.ts)
 
 <a id="ctxagentpresets--agentpresets"></a>
 
@@ -631,31 +631,39 @@ withoutInitiator<T>(operation: () => T): T
  * Register the agent-creation factory (the loop calls this on construction,
  * effect-scoped). A traced Cordis service is canonicalized to its concrete
  * target; each create/resume call is then traced through that caller's
- * context so ownership follows the caller without stacking proxy layers.
+ * context so ownership follows the caller without stacking proxy layers. Its
+ * session capabilities are snapshotted for this exact registration.
  * Throws if a factory is already registered. Returns the disposer; on
  * dispose the factory slot is cleared.
  * @param factory - the loop-owned factory {@link create}/{@link resume} delegate to.
- * @returns the disposer that clears the factory slot. The exact
+ * @returns the registration receipt that clears the factory slot. It is the exact
  *   Cordis effect disposer (single-shot): composite (generator) effects may
- *   yield it directly — exact identity nests the teardown in order.
+ *   yield it directly — exact identity nests the teardown in order. The
+ *   registry also accepts only this opaque value for direct publication.
  */
-setFactory(factory: AgentFactory): () => void
+setFactory(factory: AgentFactory): AgentFactoryRegistration
 
 /**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
  * registered or creation/setup fails. The resolved {@link AgentHandle} lets
- * the owner tear down exactly this agent.
+ * the owner tear down exactly this agent. Ambient publication authority ends
+ * when this returned Promise settles, and a replaced registration rejects
+ * every retained continuation before it can enter the registry.
  * @param options - shared identity, session seed/metadata, and agent options.
  * @returns the handle after setup, rollback-covered publication, and loop start complete.
+ * @throws {@link AgentFactoryCapabilityUnavailableError} when a seeded create's
+ *   captured factory registration does not declare `forkFromSeed: true`.
  */
 async create(options: CreateAgentOptions): Promise<AgentHandle>
 
 /**
  * Load a persisted session and resume an agent on it through the registered
  * factory. Rejects if no factory is registered; the factory rejects if
- * session persistence is not configured or persistence/setup fails.
+ * session persistence is not configured or persistence/setup fails. Ambient
+ * publication authority ends when this returned Promise settles, and a
+ * replaced registration rejects every retained continuation before entry.
  * @param options - persisted identity, configuration, and optional setup.
  * @returns the handle after setup, rollback-covered publication, and loop start complete.
  */
@@ -692,17 +700,17 @@ register(agent: Agent): () => void
  * @param owner - live agent whose scoped context created this agent, or
  *   undefined for a top-level runtime root. This is runtime ownership, not
  *   the resumed session's durable parent lineage.
- * @param publisher - registered factory directly publishing this agent. The
- *   exact canonical factory identity must still own the registry slot;
- *   omission captures only a surrounding {@link create}/{@link resume} call.
- * @throws when ids differ, the id is occupied, or `publisher` is not the
- *   exact registered factory.
+ * @param publication - opaque receipt for the exact factory registration
+ *   directly publishing this agent; omission captures only a surrounding
+ *   {@link create}/{@link resume} call.
+ * @throws when ids differ, the id is occupied, or the ambient/direct factory
+ *   registration is not the exact active slot.
  * @returns an idempotent closure that removes this exact entry and emits
  *   `agent/disposed` with listener failures contained. When called from a
  *   synchronous `agent/created` listener, removal and disposal wait until
  *   that creation dispatch unwinds.
  */
-enter(agent: Agent, owner: Agent | undefined, publisher?: AgentFactory): () => void
+enter(agent: Agent, owner: Agent | undefined, publication?: AgentFactoryRegistration): () => void
 
 /**
  * Announce an agent previously inserted with {@link enter}.
@@ -754,7 +762,7 @@ list(): Agent[]
 roots(): Agent[]
 ```
 
-Source: [`packages/core/agent/src/index.ts:274`](../../packages/core/agent/src/index.ts)
+Source: [`packages/core/agent/src/index.ts:301`](../../packages/core/agent/src/index.ts)
 
 <a id="agent-events"></a>
 
@@ -1077,7 +1085,7 @@ A declarative agent entry failed before it could publish a live agent. Consumers
 'agent-loop/config-start-failed'(payload: { sessionId: SessionId; error: unknown }): void
 ```
 
-Source: [`packages/core/agent-loop/src/index.ts:184`](../../packages/core/agent-loop/src/index.ts)
+Source: [`packages/core/agent-loop/src/index.ts:185`](../../packages/core/agent-loop/src/index.ts)
 
 <a id="agent-preset-events"></a>
 

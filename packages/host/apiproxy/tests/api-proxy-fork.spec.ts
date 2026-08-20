@@ -3,7 +3,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
-import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import type {
+  Agent,
+  AgentFactory,
+  AgentFactoryRegistration,
+  AgentHandle,
+  CreateAgentOptions,
+} from '@deepseek-ai/dsh-agent'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
@@ -22,17 +28,8 @@ function request<P>(payload: P): RpcRequest<P> {
   return { rpcId: RpcId(`fork-${String(nextRpc++)}`), payload }
 }
 
-async function composed(
-  workspaces: readonly Workspace[] = [],
-  forkFromSeed: boolean | 'omitted' = true,
-): Promise<Context> {
-  const ctx = new Context()
-  await ctx.plugin(SessionStore)
-  await ctx.plugin(SystemPrompt, { persona: '' })
-  await ctx.plugin(AgentRegistry)
-  await ctx.plugin(UserQuestionService)
-  ctx.provide('workspaceRegistry', { list: () => workspaces } as never)
-  ctx.agents.setFactory({
+function forkFactory(ctx: Context, forkFromSeed: boolean | 'omitted'): AgentFactory {
+  return {
     ...(forkFromSeed === 'omitted' ? {} : { sessionCapabilities: { forkFromSeed } }),
     createAgent: async (ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> => {
       const session = ctx.sessions.create(options.sessionId, {
@@ -47,7 +44,22 @@ async function composed(
       return { agent, dispose: () => Promise.resolve() }
     },
     resume: () => Promise.reject(new Error('fork test sources are live')),
-  })
+  }
+}
+
+async function composed(
+  workspaces: readonly Workspace[] = [],
+  forkFromSeed: boolean | 'omitted' = true,
+  captureRegistration?: (registration: AgentFactoryRegistration) => void,
+): Promise<Context> {
+  const ctx = new Context()
+  await ctx.plugin(SessionStore)
+  await ctx.plugin(SystemPrompt, { persona: '' })
+  await ctx.plugin(AgentRegistry)
+  await ctx.plugin(UserQuestionService)
+  ctx.provide('workspaceRegistry', { list: () => workspaces } as never)
+  const registration = ctx.agents.setFactory(forkFactory(ctx, forkFromSeed))
+  captureRegistration?.(registration)
   return ctx
 }
 
@@ -92,6 +104,62 @@ const api = (ctx: Context) => createApiProxy(ctx, {
   defaultModelSelection: () => ({ provider: 'default-provider', model: 'default-model' }),
   cwd: '/tmp',
 })
+
+async function forkDuringFactoryReplacement(
+  label: string,
+  replacementCapability: boolean | 'omitted',
+) {
+  let unregisterCapable!: AgentFactoryRegistration
+  const ctx = await composed([], true, (registration) => { unregisterCapable = registration })
+  const sourceId = sid(`session-fork-stale-capability-${label}`)
+  const header: SessionHeader = {
+    version: 0,
+    id: sourceId,
+    createdAt: 1,
+    cwd: '/proj',
+  }
+  const events = [
+    { type: 'turn/start', seq: 0, time: 1, data: { turn: 1, trigger: { kind: 'message', source: { kind: 'user' } } } },
+    {
+      type: 'user/message',
+      seq: 1,
+      time: 2,
+      data: createUserMessage({ content: [{ type: 'text', text: 'work' }], source: { kind: 'user' } }),
+      surfaceOp: 'append',
+    },
+    { type: 'turn/end', seq: 2, time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
+  ] as SessionEvent[]
+  const inspectionStarted = Promise.withResolvers<undefined>()
+  const inspection = Promise.withResolvers<{ meta: SessionHeader; events: SessionEvent[] }>()
+  const inspect = vi.fn(() => {
+    inspectionStarted.resolve(undefined)
+    return inspection.promise
+  })
+  ctx.provide('sessionPersistence', {
+    list: () => Promise.resolve([header]),
+    inspect,
+  } as never)
+  const beforeSessions = ctx.sessions.list().map(session => session.id)
+  const beforeAgents = ctx.agents.list().map(agent => agent.id)
+
+  const pending = api(ctx).sessions.fork(request({ sessionId: sourceId }))
+  await inspectionStarted.promise
+  expect(inspect).toHaveBeenCalledOnce()
+  unregisterCapable()
+  const replacementFactory = forkFactory(ctx, replacementCapability)
+  const replacementCreate = vi.spyOn(replacementFactory, 'createAgent')
+  ctx.agents.setFactory(replacementFactory)
+  inspection.resolve({ meta: header, events })
+
+  return {
+    beforeAgents,
+    beforeSessions,
+    ctx,
+    replacementCreate,
+    response: await pending,
+    sourceId,
+  }
+}
 
 describe('sessions.fork', () => {
   it('refuses a factory-disabled fork without changing the source or publishing a child', async () => {
@@ -143,6 +211,46 @@ describe('sessions.fork', () => {
     })
     expect(source.events).toEqual(beforeEvents)
     expect(ctx.sessions.list().map(session => session.id)).toEqual(beforeSessions)
+    await ctx.fiber.dispose()
+  })
+
+  it.each([
+    ['disabled', false],
+    ['undeclared', 'omitted'],
+  ] as const)('refuses a fork when its capable factory is replaced by a %s factory during source inspection', async (
+    _replacement,
+    replacementCapability,
+  ) => {
+    const { beforeAgents, beforeSessions, ctx, replacementCreate, response, sourceId }
+      = await forkDuringFactoryReplacement(_replacement, replacementCapability)
+
+    expect(response.result).toEqual({
+      ok: false,
+      error: {
+        code: 'fork-unavailable',
+        message: 'fork is unavailable for this session',
+        details: { sessionId: sourceId },
+      },
+    })
+    expect(replacementCreate).not.toHaveBeenCalled()
+    expect(ctx.agents.get(sourceId)).toBeUndefined()
+    expect(ctx.sessions.list().map(session => session.id)).toEqual(beforeSessions)
+    expect(ctx.agents.list().map(agent => agent.id)).toEqual(beforeAgents)
+    await ctx.fiber.dispose()
+  })
+
+  it('allows a capable replacement factory to execute a fork admitted by the prior capable registration', async () => {
+    const { beforeAgents, beforeSessions, ctx, replacementCreate, response, sourceId }
+      = await forkDuringFactoryReplacement('capable', true)
+
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const childId = response.result.value.sessionId
+    expect(replacementCreate).toHaveBeenCalledOnce()
+    expect(ctx.sessions.list().map(session => session.id)).toEqual([...beforeSessions, childId])
+    expect(ctx.agents.list().map(agent => agent.id)).toEqual([...beforeAgents, childId])
+    expect(ctx.sessions.get(childId)?.header.parentSession).toBe(sourceId)
+    expect(ctx.agents.get(childId)).toBeDefined()
     await ctx.fiber.dispose()
   })
 

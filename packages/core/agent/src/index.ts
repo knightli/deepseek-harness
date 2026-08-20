@@ -180,6 +180,14 @@ export interface AgentFactorySessionCapabilities {
   readonly forkFromSeed?: boolean
 }
 
+/** A captured factory registration does not declare a capability required by the requested operation. */
+export class AgentFactoryCapabilityUnavailableError extends Error {
+  constructor(public readonly capability: keyof AgentFactorySessionCapabilities) {
+    super(`agent factory capability "${capability}" is unavailable`)
+    this.name = 'AgentFactoryCapabilityUnavailableError'
+  }
+}
+
 /**
  * The agent-creation factory the loop implementation provides to the registry
  * via {@link AgentRegistry.setFactory}. Kept on the `dsh-agent` interface so
@@ -224,6 +232,18 @@ export interface AgentFactory {
   resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>
 }
 
+declare const agentFactoryRegistrationBrand: unique symbol
+
+/**
+ * Exact effect disposer for one factory registration and its opaque direct-publication receipt.
+ * Only {@link AgentRegistry.setFactory} can mint a value accepted by {@link AgentRegistry.enter}.
+ * A direct publisher must retain this exact function in a closure, module-private WeakMap, or
+ * plain holder; reading a function-valued field through a traced Cordis Service changes its identity.
+ */
+export type AgentFactoryRegistration = (() => void) & {
+  readonly [agentFactoryRegistrationBrand]: true
+}
+
 /** Thrown when create/resume is called before an agent factory is registered. */
 const NO_FACTORY_MESSAGE = 'no agent factory registered (load an agent-loop plugin)'
 const NO_INITIATOR_MESSAGE = 'no initiating agent is active'
@@ -252,6 +272,13 @@ interface InitiatorRun {
 /** Plain holder prevents Cordis from tracing the factory field before the caller context is known. */
 interface FactorySlot {
   readonly target: AgentFactory
+  readonly sessionCapabilities: AgentFactorySessionCapabilities | undefined
+}
+
+/** One public create/resume call that may publish only before its Promise settles. */
+interface FactoryInvocation {
+  active: boolean
+  readonly slot: FactorySlot
 }
 
 /** Resolve a traced Cordis factory service to the identity stored by the registry. */
@@ -274,7 +301,8 @@ function canonicalFactory(factory: AgentFactory): AgentFactory {
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
-  private readonly factorySessionCapabilities = new AsyncLocalStorage<AgentFactorySessionCapabilities | undefined>()
+  private readonly factoryRegistrations = new WeakMap<AgentFactoryRegistration, FactorySlot>()
+  private readonly factoryInvocations = new AsyncLocalStorage<FactoryInvocation | undefined>()
   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
@@ -380,30 +408,42 @@ export class AgentRegistry extends Service {
    * Register the agent-creation factory (the loop calls this on construction,
    * effect-scoped). A traced Cordis service is canonicalized to its concrete
    * target; each create/resume call is then traced through that caller's
-   * context so ownership follows the caller without stacking proxy layers.
+   * context so ownership follows the caller without stacking proxy layers. Its
+   * session capabilities are snapshotted for this exact registration.
    * Throws if a factory is already registered. Returns the disposer; on
    * dispose the factory slot is cleared.
    * @param factory - the loop-owned factory {@link create}/{@link resume} delegate to.
-   * @returns the disposer that clears the factory slot. The exact
+   * @returns the registration receipt that clears the factory slot. It is the exact
    *   Cordis effect disposer (single-shot): composite (generator) effects may
-   *   yield it directly — exact identity nests the teardown in order.
+   *   yield it directly — exact identity nests the teardown in order. The
+   *   registry also accepts only this opaque value for direct publication.
    */
-  setFactory(factory: AgentFactory): () => void {
+  setFactory(factory: AgentFactory): AgentFactoryRegistration {
+    // Resolve plugin-owned values before the registration commit. A getter or
+    // traced proxy may run plugin code; the effect body below keeps the final
+    // vacancy check and slot write adjacent.
+    const target = canonicalFactory(factory)
+    const sessionCapabilities = target.sessionCapabilities
+    const slot: FactorySlot = {
+      target,
+      sessionCapabilities: sessionCapabilities === undefined
+        ? undefined
+        : { ...sessionCapabilities },
+    }
     const dispose = this.ctx.effect(() => {
       if (this.factory !== undefined) throw new Error('an agent factory is already registered')
-      // Avoid stacking two Cordis shadow layers when a caller passes a Service
-      // already read through a context. Calls are re-traced through their
-      // actual owner context below.
-      const target = canonicalFactory(factory)
-      this.factory = { target }
-      return () => { this.factory = undefined }
+      this.factory = slot
+      return () => {
+        this.factory = undefined
+      }
     }, 'agents.setFactory()')
     // The exact cordis effect disposer (the agents.register() convention): a
     // caller's composite effect can yield it for in-order teardown; the
     // loop's constructor effect returns it directly, identity-nesting the
     // registration under that effect.
-    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
-    return dispose
+    const registration = dispose as unknown as AgentFactoryRegistration
+    this.factoryRegistrations.set(registration, slot)
+    return registration
   }
 
   /** Return the active creation factory. */
@@ -417,9 +457,13 @@ export class AgentRegistry extends Service {
    * Distinct from {@link register} (which records an already-constructed
    * agent): this constructs the agent and its session. Rejects if no factory is
    * registered or creation/setup fails. The resolved {@link AgentHandle} lets
-   * the owner tear down exactly this agent.
+   * the owner tear down exactly this agent. Ambient publication authority ends
+   * when this returned Promise settles, and a replaced registration rejects
+   * every retained continuation before it can enter the registry.
    * @param options - shared identity, session seed/metadata, and agent options.
    * @returns the handle after setup, rollback-covered publication, and loop start complete.
+   * @throws {@link AgentFactoryCapabilityUnavailableError} when a seeded create's
+   *   captured factory registration does not declare `forkFromSeed: true`.
    */
   async create(options: CreateAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
@@ -427,31 +471,48 @@ export class AgentRegistry extends Service {
     // explicitly. This preserves AgentLoop's dependency origin while binding
     // its effects to ownerCtx; plain factories receive ownerCtx as an explicit
     // capability and need no Cordis tracker magic.
-    const { target } = this.requireFactory()
+    const slot = this.requireFactory()
+    if (options.seed !== undefined && slot.sessionCapabilities?.forkFromSeed !== true) {
+      throw new AgentFactoryCapabilityUnavailableError('forkFromSeed')
+    }
+    const { target } = slot
     const receiver = getTraceable(ownerCtx, target)
-    return this.factorySessionCapabilities.run(
-      target.sessionCapabilities,
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
-      () => Reflect.apply(target.createAgent, receiver, [ownerCtx, options]),
-    )
+    const invocation: FactoryInvocation = { active: true, slot }
+    try {
+      return await this.factoryInvocations.run(
+        invocation,
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
+        () => Reflect.apply(target.createAgent, receiver, [ownerCtx, options]),
+      )
+    } finally {
+      invocation.active = false
+    }
   }
 
   /**
    * Load a persisted session and resume an agent on it through the registered
    * factory. Rejects if no factory is registered; the factory rejects if
-   * session persistence is not configured or persistence/setup fails.
+   * session persistence is not configured or persistence/setup fails. Ambient
+   * publication authority ends when this returned Promise settles, and a
+   * replaced registration rejects every retained continuation before entry.
    * @param options - persisted identity, configuration, and optional setup.
    * @returns the handle after setup, rollback-covered publication, and loop start complete.
    */
   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
-    const { target } = this.requireFactory()
+    const slot = this.requireFactory()
+    const { target } = slot
     const receiver = getTraceable(ownerCtx, target)
-    return this.factorySessionCapabilities.run(
-      target.sessionCapabilities,
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
-      () => Reflect.apply(target.resume, receiver, [ownerCtx, options]),
-    )
+    const invocation: FactoryInvocation = { active: true, slot }
+    try {
+      return await this.factoryInvocations.run(
+        invocation,
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
+        () => Reflect.apply(target.resume, receiver, [ownerCtx, options]),
+      )
+    } finally {
+      invocation.active = false
+    }
   }
 
   /**
@@ -492,28 +553,35 @@ export class AgentRegistry extends Service {
    * @param owner - live agent whose scoped context created this agent, or
    *   undefined for a top-level runtime root. This is runtime ownership, not
    *   the resumed session's durable parent lineage.
-   * @param publisher - registered factory directly publishing this agent. The
-   *   exact canonical factory identity must still own the registry slot;
-   *   omission captures only a surrounding {@link create}/{@link resume} call.
-   * @throws when ids differ, the id is occupied, or `publisher` is not the
-   *   exact registered factory.
+   * @param publication - opaque receipt for the exact factory registration
+   *   directly publishing this agent; omission captures only a surrounding
+   *   {@link create}/{@link resume} call.
+   * @throws when ids differ, the id is occupied, or the ambient/direct factory
+   *   registration is not the exact active slot.
    * @returns an idempotent closure that removes this exact entry and emits
    *   `agent/disposed` with listener failures contained. When called from a
    *   synchronous `agent/created` listener, removal and disposal wait until
    *   that creation dispatch unwinds.
    */
-  enter(agent: Agent, owner: Agent | undefined, publisher?: AgentFactory): () => void {
+  enter(agent: Agent, owner: Agent | undefined, publication?: AgentFactoryRegistration): () => void {
     const id = agent.id
     if (id !== agent.session.id) {
       throw new Error(`agent id "${id}" does not match session id "${agent.session.id}"`)
     }
-    let factorySessionCapabilities = this.factorySessionCapabilities.getStore()
-    if (publisher !== undefined) {
-      const target = canonicalFactory(publisher)
-      if (this.factory?.target !== target) {
-        throw new Error('direct agent publisher is not the registered factory')
+    const invocation = this.factoryInvocations.getStore()
+    if (invocation !== undefined && !invocation.active) {
+      throw new Error('agent factory invocation is no longer active')
+    }
+    let factorySlot = invocation?.slot
+    if (factorySlot !== undefined && this.factory !== factorySlot) {
+      throw new Error('agent factory registration is no longer active')
+    }
+    if (publication !== undefined) {
+      const publishedSlot = this.factoryRegistrations.get(publication)
+      if (publishedSlot === undefined || this.factory !== publishedSlot) {
+        throw new Error('agent factory publication is not the active registration')
       }
-      factorySessionCapabilities = target.sessionCapabilities
+      factorySlot = publishedSlot
     }
     const carrier = scopeTarget(agent, agent)
     // This is the authoritative collision boundary. Concurrent create/resume
@@ -524,10 +592,16 @@ export class AgentRegistry extends Service {
       agent,
       owner,
       carrier,
-      factorySessionCapabilities,
+      factorySessionCapabilities: factorySlot?.sessionCapabilities,
       announced: false,
       announcing: false,
       detachRequested: false,
+    }
+    // scopeTarget() reads the plugin-owned Agent context and can re-enter the
+    // registry. Publication commits only while the claimed registration is
+    // still current after every such read.
+    if (factorySlot !== undefined && this.factory !== factorySlot) {
+      throw new Error('agent factory registration is no longer active')
     }
     this.store.set(id, entry)
     let entered = true
@@ -634,7 +708,7 @@ export class AgentRegistry extends Service {
   sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined {
     const entry = this.store.get(id)
     if (entry !== undefined) return entry.factorySessionCapabilities
-    return this.factory?.target.sessionCapabilities
+    return this.factory?.sessionCapabilities
   }
 
   /**

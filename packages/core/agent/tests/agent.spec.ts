@@ -4,6 +4,7 @@ import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type UserMessage } from '@deepseek-ai/dsh-session'
 import AgentRegistry, {
   agentEvents,
+  AgentFactoryCapabilityUnavailableError,
   Inbox,
 } from '@deepseek-ai/dsh-agent'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
@@ -436,11 +437,133 @@ describe('AgentRegistry factory seam', () => {
     await ctx.plugin(AgentRegistry)
     const sessionId = SessionId(`factory-capability-${String(expected)}-${String(sessionCapabilities?.forkFromSeed)}`)
     const { factory } = stubFactory()
-    ctx.agents.setFactory({ ...factory, ...(sessionCapabilities === undefined ? {} : { sessionCapabilities }) })
+    ctx.agents.setFactory({
+      ...factory,
+      ...(sessionCapabilities === undefined ? {} : { sessionCapabilities }),
+      async createAgent(_ownerCtx, options) {
+        const agent = stubAgent(options.sessionId)
+        const detach = ctx.agents.enter(agent, undefined)
+        return { agent, dispose: async () => { detach() } }
+      },
+    })
 
     await ctx.agents.create({ sessionId })
 
     expect(ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed === true).toBe(expected)
+  })
+
+  it.each([
+    ['omitted', undefined],
+    ['disabled', { forkFromSeed: false } as const],
+  ])('rejects seeded create before invoking a %s factory', async (_label, sessionCapabilities) => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const { factory, calls } = stubFactory()
+    ctx.agents.setFactory({
+      ...factory,
+      ...(sessionCapabilities === undefined ? {} : { sessionCapabilities }),
+    })
+    const sessionId = SessionId(`seeded-create-${_label}`)
+
+    const pending = ctx.agents.create({ sessionId, seed: [] })
+
+    await expect(pending).rejects.toMatchObject({
+      name: 'AgentFactoryCapabilityUnavailableError',
+      capability: 'forkFromSeed',
+    })
+    await expect(pending).rejects.toBeInstanceOf(AgentFactoryCapabilityUnavailableError)
+    expect(calls.create).toEqual([])
+    expect(ctx.agents.get(sessionId)).toBeUndefined()
+  })
+
+  it('allows seeded create through its captured capable factory', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const { factory, calls } = stubFactory()
+    ctx.agents.setFactory({
+      ...factory,
+      sessionCapabilities: { forkFromSeed: true },
+    })
+    const sessionId = SessionId('seeded-create-enabled')
+    const seed = [] as const
+
+    await expect(ctx.agents.create({ sessionId, seed })).resolves.toBeDefined()
+
+    expect(calls.create).toHaveLength(1)
+    expect(calls.create[0]?.options.seed).toBe(seed)
+  })
+
+  it.each([
+    ['create', (ctx: Context, id: SessionId) => ctx.agents.create({ sessionId: id })],
+    ['resume', (ctx: Context, id: SessionId) => ctx.agents.resume({ resumeSessionId: id })],
+  ])('rejects an ambient %s publication after its factory registration is replaced', async (
+    _operation,
+    invoke,
+  ) => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const publish = async (id: SessionId) => {
+      started.resolve(undefined)
+      await release.promise
+      const agent = stubAgent(id)
+      const detach = ctx.agents.enter(agent, undefined)
+      return { agent, dispose: async () => { detach() } }
+    }
+    const factory: AgentFactory = {
+      sessionCapabilities: { forkFromSeed: true },
+      createAgent: (_ownerCtx, options) => publish(options.sessionId),
+      resume: (_ownerCtx, options) => publish(options.resumeSessionId),
+    }
+    const unregister = ctx.agents.setFactory(factory)
+    const id = SessionId(`stale-ambient-${_operation}`)
+    const pending = invoke(ctx, id)
+    await started.promise
+    unregister()
+    ctx.agents.setFactory({
+      ...stubFactory().factory,
+      sessionCapabilities: { forkFromSeed: false },
+    })
+
+    release.resolve(undefined)
+
+    await expect(pending).rejects.toThrow('agent factory registration is no longer active')
+    expect(ctx.agents.get(id)).toBeUndefined()
+    expect(ctx.agents.sessionCapabilities(SessionId('replacement-cold'))?.forkFromSeed).toBe(false)
+  })
+
+  it.each([
+    ['create', (ctx: Context, id: SessionId) => ctx.agents.create({ sessionId: id })],
+    ['resume', (ctx: Context, id: SessionId) => ctx.agents.resume({ resumeSessionId: id })],
+  ])('invalidates ambient %s publication when the factory invocation settles', async (
+    _operation,
+    invoke,
+  ) => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const release = Promise.withResolvers<undefined>()
+    let detached!: Promise<void>
+    const publishDetached = (id: SessionId) => {
+      detached = (async () => {
+        await release.promise
+        ctx.agents.enter(stubAgent(`${id}-detached`), undefined)
+      })()
+      return Promise.resolve({ agent: stubAgent(id), dispose: () => Promise.resolve() })
+    }
+    ctx.agents.setFactory({
+      sessionCapabilities: { forkFromSeed: true },
+      createAgent: (_ownerCtx, options) => publishDetached(options.sessionId),
+      resume: (_ownerCtx, options) => publishDetached(options.resumeSessionId),
+    })
+    const id = SessionId(`settled-ambient-${_operation}`)
+
+    await invoke(ctx, id)
+    const rejection = expect(detached).rejects.toThrow('agent factory invocation is no longer active')
+    release.resolve(undefined)
+
+    await rejection
+    expect(ctx.agents.get(SessionId(`${id}-detached`))).toBeUndefined()
   })
 
   it('keeps an external direct entry fail-closed while a capable factory is active', async () => {
@@ -456,20 +579,110 @@ describe('AgentRegistry factory seam', () => {
     detach()
   })
 
-  it('captures only the exact registered factory for direct publication', async () => {
+  it('accepts only the opaque exact registration for direct publication', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)
     const { factory } = stubFactory()
     const registered = { ...factory, sessionCapabilities: { forkFromSeed: true } as const }
     const stale = { ...factory, sessionCapabilities: { forkFromSeed: false } as const }
-    ctx.agents.setFactory(registered)
+    const registration = ctx.agents.setFactory(registered)
 
-    expect(() => ctx.agents.enter(stubAgent('stale-direct'), undefined, stale))
-      .toThrow('direct agent publisher is not the registered factory')
+    expect(() => ctx.agents.enter(
+      stubAgent('stale-direct'),
+      undefined,
+      stale as unknown as NonNullable<Parameters<AgentRegistry['enter']>[2]>,
+    )).toThrow('agent factory publication is not the active registration')
+    expect(ctx.agents.get(SessionId('stale-direct'))).toBeUndefined()
     const direct = stubAgent('registered-direct')
-    const detach = ctx.agents.enter(direct, undefined, registered)
+    const detach = ctx.agents.enter(direct, undefined, registration)
 
     expect(ctx.agents.sessionCapabilities(direct.id)?.forkFromSeed).toBe(true)
+    detach()
+  })
+
+  it('requires the exact registration epoch when one factory object publishes directly', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const { factory } = stubFactory()
+    const reused = { ...factory, sessionCapabilities: { forkFromSeed: true } as const }
+    const registrationA = ctx.agents.setFactory(reused)
+    registrationA()
+    const registrationB = ctx.agents.setFactory(reused)
+    const publicationId = SessionId('same-factory-registration-epoch')
+    type Publication = NonNullable<Parameters<AgentRegistry['enter']>[2]>
+    const untypedPluginValue = (value: unknown): Publication => value as Publication
+
+    expect(() => ctx.agents.enter(
+      stubAgent(publicationId),
+      undefined,
+      untypedPluginValue(registrationA),
+    )).toThrow()
+    expect(ctx.agents.get(publicationId)).toBeUndefined()
+    expect(() => ctx.agents.enter(
+      stubAgent(publicationId),
+      undefined,
+      untypedPluginValue(reused),
+    )).toThrow('agent factory publication is not the active registration')
+    expect(ctx.agents.get(publicationId)).toBeUndefined()
+
+    const foreignCtx = new Context()
+    await foreignCtx.plugin(AgentRegistry)
+    const foreignRegistration = foreignCtx.agents.setFactory(stubFactory().factory)
+    expect(() => ctx.agents.enter(
+      stubAgent(publicationId),
+      undefined,
+      foreignRegistration,
+    )).toThrow('agent factory publication is not the active registration')
+    expect(ctx.agents.get(publicationId)).toBeUndefined()
+
+    const direct = stubAgent(publicationId)
+    const detach = ctx.agents.enter(direct, undefined, untypedPluginValue(registrationB))
+    expect(ctx.agents.sessionCapabilities(direct.id)?.forkFromSeed).toBe(true)
+    detach()
+  })
+
+  it('keeps the factory commit atomic across a reentrant capability getter', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const replacement = {
+      ...stubFactory().factory,
+      sessionCapabilities: { forkFromSeed: false } as const,
+    }
+    const reentrant = {
+      ...stubFactory().factory,
+      get sessionCapabilities() {
+        ctx.agents.setFactory(replacement)
+        return { forkFromSeed: true } as const
+      },
+    }
+
+    expect(() => ctx.agents.setFactory(reentrant)).toThrow('an agent factory is already registered')
+    expect(ctx.agents.sessionCapabilities(SessionId('reentrant-factory-cold'))?.forkFromSeed).toBe(false)
+  })
+
+  it('rechecks the publication epoch after a reentrant Agent context read', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const registrationA = ctx.agents.setFactory(stubFactory().factory)
+    let registrationB: ReturnType<AgentRegistry['setFactory']> | undefined
+    const id = SessionId('reentrant-publication-epoch')
+    const stale = stubAgent(id)
+    Object.defineProperty(stale, Context.filter, {
+      get() {
+        registrationA()
+        registrationB = ctx.agents.setFactory(stubFactory().factory)
+        return undefined
+      },
+    })
+
+    expect(() => ctx.agents.enter(stale, undefined, registrationA))
+      .toThrow('agent factory registration is no longer active')
+    expect(ctx.agents.get(id)).toBeUndefined()
+
+    const replacement = stubAgent(id)
+    expect(registrationB).toBeDefined()
+    const detach = ctx.agents.enter(replacement, undefined, registrationB)
+    expect(ctx.agents.get(id)).toBe(replacement)
     detach()
   })
 
@@ -512,11 +725,11 @@ describe('AgentRegistry factory seam', () => {
     }
     await ctx.plugin(TracedFactory)
     const traced = (ctx as Context & { tracedFactory: TracedFactory }).tracedFactory
-    ctx.agents.setFactory(traced)
+    const registration = ctx.agents.setFactory(traced)
     await ctx.agents.create({ sessionId: SessionId('create-s') })
     await ctx.agents.resume({ resumeSessionId: SessionId('resume-s') })
     const direct = stubAgent('direct-s')
-    const detach = ctx.agents.enter(direct, undefined, traced)
+    const detach = ctx.agents.enter(direct, undefined, registration)
     const raw = (traced as unknown as { [symbols.original]?: TracedFactory })[symbols.original]
     expect(states.get(raw!)).toEqual(['create', 'resume'])
     expect(ctx.agents.sessionCapabilities(direct.id)?.forkFromSeed).toBe(true)
