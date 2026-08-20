@@ -11,6 +11,11 @@
         "model": "external-model"
       },
       "routable": true,
+      "capabilities": {
+        "imageInput": false,
+        "modelSelection": false,
+        "fork": false
+      },
       "externalProviderListed": false,
       "failures": []
     },
@@ -147,6 +152,11 @@
         "model": "external-model"
       },
       "routable": true,
+      "capabilities": {
+        "imageInput": false,
+        "modelSelection": false,
+        "fork": false
+      },
       "externalProviderListed": false,
       "failures": []
     },
@@ -339,6 +349,11 @@
         "model": "external-model"
       },
       "routable": false,
+      "capabilities": {
+        "imageInput": true,
+        "modelSelection": true,
+        "fork": true
+      },
       "externalProviderListed": false,
       "failures": []
     },

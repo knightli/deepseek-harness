@@ -1917,7 +1917,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return {
       imageInput: !externalText,
       modelSelection: !externalText,
-      fork: ctx.agents.sessionCapabilities(agent.id)?.forkFromSeed !== false,
+      fork: ctx.agents.sessionCapabilities(agent.id)?.forkFromSeed === true,
     }
   }
 

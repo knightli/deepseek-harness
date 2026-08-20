@@ -51,6 +51,7 @@ interface HistoryPage {
 interface ModelsValue {
   current: { provider: string; model: string }
   routable: boolean
+  capabilities: { imageInput: boolean; modelSelection: boolean; fork: boolean }
   groups: Array<{ id: string }>
   failures: unknown[]
 }
@@ -122,6 +123,7 @@ function projectModels(value: ModelsValue): unknown {
   return {
     current: value.current,
     routable: value.routable,
+    capabilities: value.capabilities,
     externalProviderListed: value.groups.some(group => group.id === EXTERNAL_PROVIDER),
     failures: value.failures,
   }

@@ -424,7 +424,7 @@ describe('AgentRegistry factory seam', () => {
   })
 
   it.each([
-    ['omitted', undefined, true],
+    ['omitted', undefined, false],
     ['enabled', { forkFromSeed: true } as const, true],
     ['disabled', { forkFromSeed: false } as const, false],
   ])('reports the %s factory fork capability for its created session', async (
@@ -440,7 +440,7 @@ describe('AgentRegistry factory seam', () => {
 
     await ctx.agents.create({ sessionId })
 
-    expect(ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed ?? true).toBe(expected)
+    expect(ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed === true).toBe(expected)
   })
 
   it('rejects a second factory and clears the slot with its owner (HMR)', async () => {

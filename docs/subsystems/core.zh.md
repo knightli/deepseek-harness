@@ -391,7 +391,7 @@ async resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandl
 
 Types: [SessionHeader](persistence.md)
 
-Source: [`packages/core/agent-loop/src/index.ts:296`](../../packages/core/agent-loop/src/index.ts)
+Source: [`packages/core/agent-loop/src/index.ts:297`](../../packages/core/agent-loop/src/index.ts)
 
 <a id="ctxagentpresets--agentpresets"></a>
 
@@ -727,7 +727,7 @@ get(id: SessionId): Agent | undefined
  * Session, or of the active factory that would resume a cold Session. This
  * method never creates or resumes an Agent.
  * @param id - shared Agent/Session id whose factory behavior is queried.
- * @returns the factory declaration, or `undefined` for the stock defaults.
+ * @returns the factory declaration, or `undefined` when the factory omitted it.
  */
 sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined
 
@@ -1079,7 +1079,7 @@ A declarative agent entry failed before it could publish a live agent. Consumers
 'agent-loop/config-start-failed'(payload: { sessionId: SessionId; error: unknown }): void
 ```
 
-Source: [`packages/core/agent-loop/src/index.ts:183`](../../packages/core/agent-loop/src/index.ts)
+Source: [`packages/core/agent-loop/src/index.ts:184`](../../packages/core/agent-loop/src/index.ts)
 
 <a id="agent-preset-events"></a>
 

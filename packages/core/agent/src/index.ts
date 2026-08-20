@@ -176,7 +176,7 @@ export interface AgentHandle {
 
 /** Factory-owned capabilities that apply to sessions created or resumed through it. */
 export interface AgentFactorySessionCapabilities {
-  /** Whether the factory can create a new Agent from a completed-session seed. */
+  /** Whether the factory can create a new Agent from a completed-session seed. Omission is unsupported. */
   readonly forkFromSeed?: boolean
 }
 
@@ -188,8 +188,8 @@ export interface AgentFactorySessionCapabilities {
  */
 export interface AgentFactory {
   /**
-   * Optional session-operation capabilities. Omission preserves the stock
-   * factory behavior, including seeded forks.
+   * Optional session-operation capabilities. Seeded forks require
+   * `forkFromSeed: true`; false or omission is unsupported.
    */
   readonly sessionCapabilities?: AgentFactorySessionCapabilities
   /**
@@ -610,7 +610,7 @@ export class AgentRegistry extends Service {
    * Session, or of the active factory that would resume a cold Session. This
    * method never creates or resumes an Agent.
    * @param id - shared Agent/Session id whose factory behavior is queried.
-   * @returns the factory declaration, or `undefined` for the stock defaults.
+   * @returns the factory declaration, or `undefined` when the factory omitted it.
    */
   sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined {
     const entry = this.store.get(id)

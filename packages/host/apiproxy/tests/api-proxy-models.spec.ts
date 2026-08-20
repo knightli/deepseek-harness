@@ -76,7 +76,7 @@ async function harness(logged?: {
   provider: string
   model: string
   reasoningEffort?: ReasoningEffortId
-}): Promise<{
+}, forkFromSeed: boolean | 'omitted' = true): Promise<{
   ctx: Context
   agent: Agent
   sessionId: SessionId
@@ -111,7 +111,15 @@ async function harness(logged?: {
     ctx,
     inbox: { nextTurn: [], nextStep: [] },
   } as unknown as Agent
-  ctx.agents.register(agent)
+  ctx.agents.setFactory({
+    ...(forkFromSeed === 'omitted' ? {} : { sessionCapabilities: { forkFromSeed } }),
+    createAgent: async () => {
+      ctx.agents.register(agent)
+      return { agent, dispose: () => Promise.resolve() }
+    },
+    resume: () => Promise.reject(new Error('model-directory test sessions are live')),
+  })
+  await ctx.agents.create({ sessionId: session.id })
   return { ctx, agent, sessionId: session.id }
 }
 
@@ -482,8 +490,23 @@ describe('Web session model selection', () => {
     await ctx.fiber.dispose()
   })
 
+  it.each([
+    ['explicitly enabled', true, true],
+    ['explicitly disabled', false, false],
+    ['omitted', 'omitted' as const, false],
+  ])('reports ordinary-session fork admission as %s', async (_label, declaration, expected) => {
+    const { ctx, sessionId } = await harness(undefined, declaration)
+    const catalog = expectValue(await createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    }).sessions.models(request({ sessionId })))
+
+    expect(catalog.capabilities.fork).toBe(expected)
+    await ctx.fiber.dispose()
+  })
+
   it('admits a text prompt through an external-text Agent without an LLM route', async () => {
-    const { ctx, agent, sessionId } = await harness()
+    const { ctx, agent, sessionId } = await harness(undefined, 'omitted')
     const followup = vi.fn<(message: UserMessage) => void>()
     Object.assign(agent, {
       promptExecution: { kind: 'external-text' },
@@ -501,7 +524,7 @@ describe('Web session model selection', () => {
 
     expect(expectValue(await api.sessions.models(request({ sessionId })))).toMatchObject({
       routable: true,
-      capabilities: { imageInput: false, modelSelection: false, fork: true },
+      capabilities: { imageInput: false, modelSelection: false, fork: false },
     })
     expect((await api.sessions.prompt(promptRequest)).result).toEqual({
       ok: true,

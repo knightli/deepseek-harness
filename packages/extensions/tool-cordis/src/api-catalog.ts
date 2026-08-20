@@ -106,6 +106,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Concrete agent factory and driver service.',
     methods: [
       {
+        signature: 'readonly sessionCapabilities: AgentFactorySessionCapabilities = { forkFromSeed: true }',
+        description: 'Seeded creation is the implementation used by the Host\'s ordinary Session fork.',
+        parameters: [],
+      },
+      {
         signature: 'readonly config: ResolvedConfig',
         description: 'Validated configuration owned by the agent-loop service.',
         parameters: [],
@@ -294,7 +299,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'sessionCapabilities(id: SessionId): AgentFactorySessionCapabilities | undefined',
         description: 'Read the session-operation capabilities of the factory that owns a live Session, or of the active factory that would resume a cold Session. This method never creates or resumes an Agent.',
         parameters: [{ name: 'id', description: 'shared Agent/Session id whose factory behavior is queried.' }],
-        returns: 'the factory declaration, or `undefined` for the stock defaults.',
+        returns: 'the factory declaration, or `undefined` when the factory omitted it.',
       },
       {
         signature: 'isOwnedBy(id: SessionId, owner: Agent): boolean',
