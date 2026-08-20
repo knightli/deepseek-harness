@@ -4,10 +4,12 @@
 // No browser and no model call — these are composition facts, and the browser
 // scenarios in this lane cover the surface itself.
 import { readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it } from 'vitest'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { canonicalPath, writableRoots } from '@deepseek-ai/dsh-sandbox'
 import { SessionId } from '@deepseek-ai/dsh-session'
 // Empty type imports carry the tools/sandboxPolicy/approval Context merges.
@@ -23,6 +25,46 @@ import { launchWebScaffold, type WebScaffold } from './scaffold.ts'
 const FILE_REFERENCE_PROMPT = fileURLToPath(new URL(
   './snapshots/web-runtime-context/file-reference-prompt.expected.md', import.meta.url,
 ))
+
+const CONFIGURED_FORK_SESSION_ID = SessionId('configured-agent-loop-fork')
+
+type RpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: string; message: string; details: unknown } }
+
+let rpcOrdinal = 0
+
+async function rpc<T>(baseUrl: string, method: string, payload: unknown): Promise<RpcResult<T>> {
+  const response = await fetch(`${baseUrl}/api/${method}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'client-request',
+      rpcId: `configured-agent-loop-${String(++rpcOrdinal)}`,
+      method,
+      payload,
+    }),
+  })
+  expect(response.status, `${method} HTTP status`).toBe(200)
+  return (await response.json() as { result: RpcResult<T> }).result
+}
+
+function expectValue<T>(result: RpcResult<T>): T {
+  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+  return result.value
+}
+
+async function writeConfiguredAgentOverlay(path: string, identity: 'sessionId' | 'resumeSessionId'): Promise<void> {
+  await writeFile(path, [
+    '- id: agent-loop',
+    "  name: '@deepseek-ai/dsh-agent-loop'",
+    '  config:',
+    '    agents:',
+    '      - id: configured-fork',
+    `        ${identity}: ${CONFIGURED_FORK_SESSION_ID}`,
+    '',
+  ].join('\n'))
+}
 
 /**
  * The catalog the shipped Web composition puts in front of the model, minus the
@@ -72,6 +114,91 @@ afterEach(async () => {
   await scaffold?.close()
   scaffold = undefined
 })
+
+it('keeps stock fork capability executable for exact config create and config restore', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'dsh-web-configured-fork-ws-'))
+  const persistenceRoot = await mkdtemp(join(tmpdir(), 'dsh-web-configured-fork-sessions-'))
+  const harnessHome = join(workspaceRoot, '.dsh-home')
+  const createOverlay = join(workspaceRoot, 'create.overlay.yml')
+  const resumeOverlay = join(workspaceRoot, 'resume.overlay.yml')
+  await Promise.all([
+    writeConfiguredAgentOverlay(createOverlay, 'sessionId'),
+    writeConfiguredAgentOverlay(resumeOverlay, 'resumeSessionId'),
+  ])
+
+  try {
+    scaffold = await launchWebScaffold({
+      workspaceCwd: workspaceRoot,
+      persistenceRoot,
+      harnessHome,
+      extraOverlayPath: createOverlay,
+    })
+    await expect.poll(() => scaffold?.ctx.agents.get(CONFIGURED_FORK_SESSION_ID)).toBeDefined()
+    const created = scaffold.ctx.agents.get(CONFIGURED_FORK_SESSION_ID)
+    if (created === undefined) throw new Error('exact config creation published no Agent')
+    created.session.append('turn/start', { turn: 1 })
+    created.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'forkable configured history' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    created.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await scaffold.ctx.sessions.flush(created.session)
+
+    const createdModels = expectValue(await rpc<{
+      capabilities: { fork: boolean }
+    }>(scaffold.baseUrl, 'session.models', { sessionId: CONFIGURED_FORK_SESSION_ID }))
+    const createdFork = await rpc<{ sessionId: string }>(
+      scaffold.baseUrl,
+      'session.fork',
+      { sessionId: CONFIGURED_FORK_SESSION_ID },
+    )
+    if (createdFork.ok) {
+      expect(scaffold.ctx.agents.get(SessionId(createdFork.value.sessionId))).toBeDefined()
+    }
+
+    await scaffold.close()
+    scaffold = undefined
+
+    scaffold = await launchWebScaffold({
+      workspaceCwd: workspaceRoot,
+      persistenceRoot,
+      harnessHome,
+      extraOverlayPath: resumeOverlay,
+      welcomeNoticePending: true,
+    })
+    await expect.poll(() => scaffold?.ctx.agents.get(CONFIGURED_FORK_SESSION_ID)).toBeDefined()
+    const resumed = scaffold.ctx.agents.get(CONFIGURED_FORK_SESSION_ID)
+    expect(JSON.stringify(resumed?.session.deriveMessages())).toContain('forkable configured history')
+
+    const resumedModels = expectValue(await rpc<{
+      capabilities: { fork: boolean }
+    }>(scaffold.baseUrl, 'session.models', { sessionId: CONFIGURED_FORK_SESSION_ID }))
+    const resumedFork = await rpc<{ sessionId: string }>(
+      scaffold.baseUrl,
+      'session.fork',
+      { sessionId: CONFIGURED_FORK_SESSION_ID },
+    )
+    if (resumedFork.ok) {
+      expect(scaffold.ctx.agents.get(SessionId(resumedFork.value.sessionId))).toBeDefined()
+    }
+
+    expect.soft(createdModels.capabilities.fork, 'exact sessionId config capability').toBe(true)
+    expect.soft(createdFork.ok, 'exact sessionId config fork execution').toBe(true)
+    expect.soft(resumedModels.capabilities.fork, 'resumeSessionId config capability').toBe(true)
+    expect.soft(resumedFork.ok, 'resumeSessionId config fork execution').toBe(true)
+  } finally {
+    const active = scaffold
+    scaffold = undefined
+    try {
+      await active?.close()
+    } finally {
+      await Promise.all([
+        rm(workspaceRoot, { recursive: true, force: true }),
+        rm(persistenceRoot, { recursive: true, force: true }),
+      ])
+    }
+  }
+}, 120_000)
 
 it('assembles the shipped Web catalog, file-reference guidance, and confined access default', async () => {
   scaffold = await launchWebScaffold()

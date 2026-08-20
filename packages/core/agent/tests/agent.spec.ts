@@ -443,6 +443,36 @@ describe('AgentRegistry factory seam', () => {
     expect(ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed === true).toBe(expected)
   })
 
+  it('keeps an external direct entry fail-closed while a capable factory is active', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const { factory } = stubFactory()
+    ctx.agents.setFactory({ ...factory, sessionCapabilities: { forkFromSeed: true } })
+    const external = stubAgent('external-direct')
+
+    const detach = ctx.agents.enter(external, undefined)
+
+    expect(ctx.agents.sessionCapabilities(external.id)).toBeUndefined()
+    detach()
+  })
+
+  it('captures only the exact registered factory for direct publication', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const { factory } = stubFactory()
+    const registered = { ...factory, sessionCapabilities: { forkFromSeed: true } as const }
+    const stale = { ...factory, sessionCapabilities: { forkFromSeed: false } as const }
+    ctx.agents.setFactory(registered)
+
+    expect(() => ctx.agents.enter(stubAgent('stale-direct'), undefined, stale))
+      .toThrow('direct agent publisher is not the registered factory')
+    const direct = stubAgent('registered-direct')
+    const detach = ctx.agents.enter(direct, undefined, registered)
+
+    expect(ctx.agents.sessionCapabilities(direct.id)?.forkFromSeed).toBe(true)
+    detach()
+  })
+
   it('rejects a second factory and clears the slot with its owner (HMR)', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)
@@ -460,6 +490,7 @@ describe('AgentRegistry factory seam', () => {
     await ctx.plugin(AgentRegistry)
     const states = new WeakMap<object, string[]>()
     class TracedFactory extends Service implements AgentFactory {
+      readonly sessionCapabilities = { forkFromSeed: true } as const
       constructor(inner: Context) {
         super(inner, 'tracedFactory')
         states.set(this, [])
@@ -484,7 +515,11 @@ describe('AgentRegistry factory seam', () => {
     ctx.agents.setFactory(traced)
     await ctx.agents.create({ sessionId: SessionId('create-s') })
     await ctx.agents.resume({ resumeSessionId: SessionId('resume-s') })
+    const direct = stubAgent('direct-s')
+    const detach = ctx.agents.enter(direct, undefined, traced)
     const raw = (traced as unknown as { [symbols.original]?: TracedFactory })[symbols.original]
     expect(states.get(raw!)).toEqual(['create', 'resume'])
+    expect(ctx.agents.sessionCapabilities(direct.id)?.forkFromSeed).toBe(true)
+    detach()
   })
 })

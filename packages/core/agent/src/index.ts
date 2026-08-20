@@ -254,6 +254,11 @@ interface FactorySlot {
   readonly target: AgentFactory
 }
 
+/** Resolve a traced Cordis factory service to the identity stored by the registry. */
+function canonicalFactory(factory: AgentFactory): AgentFactory {
+  return (factory as AgentFactory & { [symbols.original]?: AgentFactory })[symbols.original] ?? factory
+}
+
 /**
  * Agent service (`ctx.agents`): tracks live agents and carries the initiating
  * Agent through one process-local asynchronous driver chain. Agent *creation*
@@ -389,7 +394,7 @@ export class AgentRegistry extends Service {
       // Avoid stacking two Cordis shadow layers when a caller passes a Service
       // already read through a context. Calls are re-traced through their
       // actual owner context below.
-      const target = (factory as AgentFactory & { [symbols.original]?: AgentFactory })[symbols.original] ?? factory
+      const target = canonicalFactory(factory)
       this.factory = { target }
       return () => { this.factory = undefined }
     }, 'agents.setFactory()')
@@ -478,23 +483,37 @@ export class AgentRegistry extends Service {
 
   /**
    * Insert an already-constructed agent without announcing it. This is the
-   * advanced ordered-lifecycle primitive used by the async agent factory: it
-   * first completes setup while the agent is unpublished, then assigns the
-   * returned detach closure into its pre-installed composite teardown before
-   * calling {@link announce}. Ordinary callers use {@link register}.
+   * advanced ordered-lifecycle primitive used by the async agent factory and
+   * by a registered factory's direct declarative publication. Setup finishes
+   * while the agent is unpublished, then the caller installs the returned
+   * detach closure before calling {@link announce}. Ordinary callers use
+   * {@link register}.
    * @param agent - the prepared, unpublished agent.
    * @param owner - live agent whose scoped context created this agent, or
    *   undefined for a top-level runtime root. This is runtime ownership, not
    *   the resumed session's durable parent lineage.
+   * @param publisher - registered factory directly publishing this agent. The
+   *   exact canonical factory identity must still own the registry slot;
+   *   omission captures only a surrounding {@link create}/{@link resume} call.
+   * @throws when ids differ, the id is occupied, or `publisher` is not the
+   *   exact registered factory.
    * @returns an idempotent closure that removes this exact entry and emits
    *   `agent/disposed` with listener failures contained. When called from a
    *   synchronous `agent/created` listener, removal and disposal wait until
    *   that creation dispatch unwinds.
    */
-  enter(agent: Agent, owner: Agent | undefined): () => void {
+  enter(agent: Agent, owner: Agent | undefined, publisher?: AgentFactory): () => void {
     const id = agent.id
     if (id !== agent.session.id) {
       throw new Error(`agent id "${id}" does not match session id "${agent.session.id}"`)
+    }
+    let factorySessionCapabilities = this.factorySessionCapabilities.getStore()
+    if (publisher !== undefined) {
+      const target = canonicalFactory(publisher)
+      if (this.factory?.target !== target) {
+        throw new Error('direct agent publisher is not the registered factory')
+      }
+      factorySessionCapabilities = target.sessionCapabilities
     }
     const carrier = scopeTarget(agent, agent)
     // This is the authoritative collision boundary. Concurrent create/resume
@@ -505,7 +524,7 @@ export class AgentRegistry extends Service {
       agent,
       owner,
       carrier,
-      factorySessionCapabilities: this.factorySessionCapabilities.getStore(),
+      factorySessionCapabilities,
       announced: false,
       announcing: false,
       detachRequested: false,

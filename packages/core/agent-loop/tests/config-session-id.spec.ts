@@ -71,6 +71,7 @@ describe('config-driven session id', () => {
       agents: [{ id: 'main', sessionId: SessionId('config-exact'), model: 'mock' }],
     })
     expect(exact.agents.get(SessionId('config-exact'))?.session.id).toBe('config-exact')
+    expect(exact.agents.sessionCapabilities(SessionId('config-exact'))?.forkFromSeed).toBe(true)
     await exact.fiber.dispose()
 
     const conflicting = await makeCoreContext()
@@ -427,6 +428,7 @@ describe('config-driven session id', () => {
     expect(resumed.session.id).toBe('sticky-1')
     const derived = resumed.session.deriveMessages()
     expect(JSON.stringify(derived)).toContain('remember me')
+    expect(ctx2.agents.sessionCapabilities(SessionId('sticky-1'))?.forkFromSeed).toBe(true)
     await ctx2.fiber.dispose()
   })
 

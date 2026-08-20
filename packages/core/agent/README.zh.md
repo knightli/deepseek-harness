@@ -19,7 +19,7 @@ Agent 接口、注册表、进程本地发起方作用域，以及 `agent/*` 事
 `Agent.promptExecution` 是返回的实时 Agent 所拥有的非持久能力，不是 `AgentOptions` 字段。该字段缺席时，文本提示词仍由 DSH LLM 路由执行；只有所选提供方没有适配器服务时才不可路由。`{ kind: 'external-text' }` 声明这个 Agent 通过自身 driver 接受普通文本 follow-up 与 steering，无需 DSH 适配器；图片输入与模型选择仍不受支持。Agent 依赖外部文本执行且没有 DSH 路由的工厂，必须在 create 与 resume 返回的每个 Agent 上分别声明这项能力，因为会话数据不会重建它；普通自定义 Agent 可以省略（[决策](../../../.agents/notes/implemented/architecture/2026-08-14-external-text-prompt-execution.md)）。
 
 - `ctx.agents.register(agent: Agent): () => void`：记录一个 **已经构造完成** 的 agent。随调用 fiber dispose。
-- 高级有序生命周期：`enter(agent, owner): () => void` 强制 `agent.id === agent.session.id`，执行权威 ID 冲突检查，并在不通知的情况下插入；`owner` 显式记录实时创建方 agent 关系（根 agent 为 `undefined`），与持久会话谱系无关。`announce(agent)` 恰好发出一次 `agent/created`。创建监听器同步请求的 detach 会延后到该次分发结束；每次 detach 都会检查捕获的条目对象，因此陈旧能力无法删除后续使用同一 ID 的替代项。异步工厂使用这一拆分；普通插件使用 `register()`。
+- 高级有序生命周期：`enter(agent, owner, publisher?): () => void` 强制 `agent.id === agent.session.id`，执行权威 ID 冲突检查，并在不通知的情况下插入；`owner` 显式记录实时创建方 agent 关系（根 agent 为 `undefined`），与持久会话谱系无关。直接发布的工厂必须是当前注册表槽位中精确的规范工厂；它只记录该工厂声明的会话能力。省略 `publisher` 时，只会捕获外围的 `ctx.agents.create()` 或 `resume()` 调用，绝不会仅因活跃工厂具备能力而借用其声明。`announce(agent)` 恰好发出一次 `agent/created`。创建监听器同步请求的 detach 会延后到该次分发结束；每次 detach 都会检查捕获的条目对象，因此陈旧能力无法删除后续使用同一 ID 的替代项。工厂发布使用这一拆分；普通插件使用 `register()`。
 - `ctx.agents.get(id: SessionId): Agent | undefined`
 - `ctx.agents.isOwnedBy(id: SessionId, owner: Agent): boolean`：该确切实时条目是否通过父 agent 的作用域上下文创建；运行时所有权与持久会话谱系无关。
 - `ctx.agents.list(): Agent[]`
@@ -40,7 +40,7 @@ Agent 接口、注册表、进程本地发起方作用域，以及 `agent/*` 事
 
 Agent *创建* 由实现 `AgentFactory` 的插件（`dsh-agent-loop`）提供，并通过 `setFactory` 注册。这样，创建功能留在 `dsh-agent` 接口上，消费方（UI、ACP（Agent Client Protocol）桥接层）可以面向 `ctx.agents` 编程，而不依赖具体循环包。注册表会把已经 traced 的 Service 规范化为具体目标，并通过调用方上下文重新 trace 每次调用；这既避免嵌套 Cordis shadow，也会把显式、绑定调用方的 `ownerCtx` 传给普通工厂。
 
-`AgentFactory.sessionCapabilities` 可选择声明工厂级会话操作。从 seed fork 的准入要求 `forkFromSeed: true`；false 或省略都会拒绝实时和冷会话的通用 fork 准入。`ctx.agents.sessionCapabilities(id)` 会读取发布实时 Agent 的工厂能力，或读取将要恢复冷会话的活跃工厂能力，而且不会创建或恢复 Agent。图片输入和模型选择仍是由 Host 从实时 Agent 推导的事实，而不是工厂字段（[决策](../../../.agents/notes/implemented/bug-fix/2026-08-17-fail-closed-session-capability-admission.md)）。
+`AgentFactory.sessionCapabilities` 可选择声明工厂级会话操作。从 seed fork 的准入要求 `forkFromSeed: true`；false 或省略都会拒绝实时和冷会话的通用 fork 准入。`ctx.agents.sessionCapabilities(id)` 会读取发布实时 Agent 时捕获的工厂声明，或读取将要恢复冷会话的活跃工厂能力，而且不会创建或恢复 Agent。经注册表包装的创建与恢复会自动捕获该声明；直接发布的工厂则通过 `enter()` 标识精确的已注册工厂。直接注册的外部 Agent 会省略该身份，因此即使活跃工厂具备能力也仍视为未声明。图片输入和模型选择仍是由 Host 从实时 Agent 推导的事实，而不是工厂字段（[决策](../../../.agents/notes/implemented/bug-fix/2026-08-17-fail-closed-session-capability-admission.md)）。
 
 - `ctx.agents.setFactory(factory: AgentFactory): () => void`：注册创建工厂（循环在构造时调用）。第二个工厂会导致抛出；dispose 时清空槽位。
 - `ctx.agents.create(options: CreateAgentOptions): Promise<AgentHandle>`：创建会话和 agent，在不发布的情况下等待可选 setup，然后通过最终的 `SessionStore.enter()` 与 `AgentRegistry.enter()` 检查发布。不支持并发创建同一 ID：多个操作可以进行准备，但只有一个能进入；每个失败方都会回滚其私有作用域／会话／驱动器。可选且只用于创建的 `signal` 会取消未发布的 setup，并在返回 handle 前分离；之后的取消使用 `handle.dispose()` 或 `agent.cancel()`。发布包含在回滚范围内，回滚期间每条已交付创建边都会成对处理。未注册工厂时拒绝。

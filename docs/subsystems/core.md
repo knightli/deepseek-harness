@@ -683,20 +683,26 @@ register(agent: Agent): () => void
 
 /**
  * Insert an already-constructed agent without announcing it. This is the
- * advanced ordered-lifecycle primitive used by the async agent factory: it
- * first completes setup while the agent is unpublished, then assigns the
- * returned detach closure into its pre-installed composite teardown before
- * calling {@link announce}. Ordinary callers use {@link register}.
+ * advanced ordered-lifecycle primitive used by the async agent factory and
+ * by a registered factory's direct declarative publication. Setup finishes
+ * while the agent is unpublished, then the caller installs the returned
+ * detach closure before calling {@link announce}. Ordinary callers use
+ * {@link register}.
  * @param agent - the prepared, unpublished agent.
  * @param owner - live agent whose scoped context created this agent, or
  *   undefined for a top-level runtime root. This is runtime ownership, not
  *   the resumed session's durable parent lineage.
+ * @param publisher - registered factory directly publishing this agent. The
+ *   exact canonical factory identity must still own the registry slot;
+ *   omission captures only a surrounding {@link create}/{@link resume} call.
+ * @throws when ids differ, the id is occupied, or `publisher` is not the
+ *   exact registered factory.
  * @returns an idempotent closure that removes this exact entry and emits
  *   `agent/disposed` with listener failures contained. When called from a
  *   synchronous `agent/created` listener, removal and disposal wait until
  *   that creation dispatch unwinds.
  */
-enter(agent: Agent, owner: Agent | undefined): () => void
+enter(agent: Agent, owner: Agent | undefined, publisher?: AgentFactory): () => void
 
 /**
  * Announce an agent previously inserted with {@link enter}.
@@ -748,7 +754,7 @@ list(): Agent[]
 roots(): Agent[]
 ```
 
-Source: [`packages/core/agent/src/index.ts:269`](../../packages/core/agent/src/index.ts)
+Source: [`packages/core/agent/src/index.ts:274`](../../packages/core/agent/src/index.ts)
 
 <a id="agent-events"></a>
 

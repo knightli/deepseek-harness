@@ -278,10 +278,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the EXACT Cordis effect disposer (single-shot; a repeat call returns undefined without awaiting an in-flight teardown). Exact identity is load-bearing: a composite (generator) effect that owns a teardown ORDER — the agent factory\'s lifecycle chain — must yield THIS function so Cordis nests the unregistration at that yield position; yielding a wrapper would leave it disposing as a concurrent sibling on owner unload, unregistering the agent (and emitting `agent/disposed`) while its final turn is still draining.',
       },
       {
-        signature: 'enter(agent: Agent, owner: Agent | undefined): () => void',
-        description: 'Insert an already-constructed agent without announcing it. This is the advanced ordered-lifecycle primitive used by the async agent factory: it first completes setup while the agent is unpublished, then assigns the returned detach closure into its pre-installed composite teardown before calling announce. Ordinary callers use register.',
-        parameters: [{ name: 'agent', description: 'the prepared, unpublished agent.' }, { name: 'owner', description: 'live agent whose scoped context created this agent, or undefined for a top-level runtime root. This is runtime ownership, not the resumed session\'s durable parent lineage.' }],
+        signature: 'enter(agent: Agent, owner: Agent | undefined, publisher?: AgentFactory): () => void',
+        description: 'Insert an already-constructed agent without announcing it. This is the advanced ordered-lifecycle primitive used by the async agent factory and by a registered factory\'s direct declarative publication. Setup finishes while the agent is unpublished, then the caller installs the returned detach closure before calling announce. Ordinary callers use register.',
+        parameters: [{ name: 'agent', description: 'the prepared, unpublished agent.' }, { name: 'owner', description: 'live agent whose scoped context created this agent, or undefined for a top-level runtime root. This is runtime ownership, not the resumed session\'s durable parent lineage.' }, { name: 'publisher', description: 'registered factory directly publishing this agent. The exact canonical factory identity must still own the registry slot; omission captures only a surrounding {@link create}/{@link resume} call.' }],
         returns: 'an idempotent closure that removes this exact entry and emits `agent/disposed` with listener failures contained. When called from a synchronous `agent/created` listener, removal and disposal wait until that creation dispatch unwinds.',
+        throws: ['when ids differ, the id is occupied, or `publisher` is not the exact registered factory.'],
       },
       {
         signature: 'announce(agent: Agent): void',

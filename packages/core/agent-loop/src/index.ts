@@ -560,7 +560,7 @@ export class AgentLoop extends Service implements AgentFactory {
         publish: (source) => {
           assertLive()
           detachSession = agent.ctx.sessions.enter(session)
-          detachAgent = loopCtx.agents.enter(agent, ownerCtx.agent)
+          detachAgent = loopCtx.agents.enter(agent, ownerCtx.agent, this)
           agent.ctx.sessions.announce(session)
           assertLive()
           loopCtx.agents.announce(agent)
