@@ -24,7 +24,7 @@ function request<P>(payload: P): RpcRequest<P> {
 
 async function composed(
   workspaces: readonly Workspace[] = [],
-  forkFromSeed?: boolean,
+  forkFromSeed: boolean | 'omitted' = true,
 ): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
@@ -33,7 +33,7 @@ async function composed(
   await ctx.plugin(UserQuestionService)
   ctx.provide('workspaceRegistry', { list: () => workspaces } as never)
   ctx.agents.setFactory({
-    ...(forkFromSeed === undefined ? {} : { sessionCapabilities: { forkFromSeed } }),
+    ...(forkFromSeed === 'omitted' ? {} : { sessionCapabilities: { forkFromSeed } }),
     createAgent: async (ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> => {
       const session = ctx.sessions.create(options.sessionId, {
         ...options.seed === undefined ? {} : { seed: [...options.seed] },
@@ -54,14 +54,18 @@ async function composed(
 /** Tail turn appended after the completed ones: left open, or closed as aborted (a stopped turn). */
 type Tail = 'none' | 'open' | 'aborted'
 
-function liveAgent(
+async function liveAgent(
   ctx: Context,
   id: string,
   turns: number,
   tail: Tail = 'none',
   lineage: { parentSession?: SessionId; origin?: 'subagent' } = {},
-): Session {
-  const session = ctx.sessions.create(sid(id), { meta: { cwd: '/proj', ...lineage } })
+): Promise<Session> {
+  const { agent } = await ctx.agents.create({
+    sessionId: sid(id),
+    meta: { cwd: '/proj', ...lineage },
+  })
+  const { session } = agent
   for (let turn = 1; turn <= turns; turn++) {
     session.append('turn/start', { turn })
     session.append('user/message', createUserMessage({
@@ -81,7 +85,6 @@ function liveAgent(
       reason: { kind: 'aborted', reason: { kind: 'user' } },
     })
   }
-  ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
   return session
 }
 
@@ -122,9 +125,30 @@ describe('sessions.fork', () => {
     await ctx.fiber.dispose()
   })
 
+  it('refuses an undeclared factory fork without changing the source or publishing a child', async () => {
+    const ctx = await composed([], 'omitted')
+    const source = await liveAgent(ctx, 'session-fork-undeclared', 1)
+    const beforeEvents = [...source.events]
+    const beforeSessions = ctx.sessions.list().map(session => session.id)
+
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id }))
+
+    expect(response.result).toEqual({
+      ok: false,
+      error: {
+        code: 'fork-unavailable',
+        message: 'fork is unavailable for this session',
+        details: { sessionId: source.id },
+      },
+    })
+    expect(source.events).toEqual(beforeEvents)
+    expect(ctx.sessions.list().map(session => session.id)).toEqual(beforeSessions)
+    await ctx.fiber.dispose()
+  })
+
   it('cuts at the anchored completed turn and records lineage and cwd', async () => {
     const ctx = await composed()
-    const source = liveAgent(ctx, 'session-source', 2)
+    const source = await liveAgent(ctx, 'session-source', 2)
     const response = await api(ctx).sessions.fork(request({ sessionId: source.id, atSeq: 1 }))
     expect(response.result.ok).toBe(true)
     if (!response.result.ok) return
@@ -146,13 +170,13 @@ describe('sessions.fork', () => {
       attachSession,
     } as unknown as Workspace
     const ctx = await composed([workspace])
-    const owner = liveAgent(ctx, 'session-owner', 1)
+    const owner = await liveAgent(ctx, 'session-owner', 1)
     accounted.push(owner.id)
-    const child = liveAgent(ctx, 'session-child', 1, 'none', {
+    const child = await liveAgent(ctx, 'session-child', 1, 'none', {
       parentSession: owner.id,
       origin: 'subagent',
     })
-    const grandchild = liveAgent(ctx, 'session-grandchild', 1, 'none', {
+    const grandchild = await liveAgent(ctx, 'session-grandchild', 1, 'none', {
       parentSession: child.id,
       origin: 'subagent',
     })
@@ -236,7 +260,7 @@ describe('sessions.fork', () => {
 
   it('uses the last completed turn only for omitted and past-end anchors', async () => {
     const ctx = await composed()
-    const source = liveAgent(ctx, 'session-tail', 2, 'open')
+    const source = await liveAgent(ctx, 'session-tail', 2, 'open')
     const proxy = api(ctx)
     const expectedTypes = [
       'turn/start', 'user/message', 'turn/end',
@@ -260,7 +284,7 @@ describe('sessions.fork', () => {
 
   it('cuts through an aborted turn: stopped is closed, not open', async () => {
     const ctx = await composed()
-    const source = liveAgent(ctx, 'session-aborted', 1, 'aborted')
+    const source = await liveAgent(ctx, 'session-aborted', 1, 'aborted')
     // What a stopped message's fork button anchors on: the frozen node sits
     // one event before its turn/end, floored client-side to that event's seq.
     const anchor = (source.events.at(-1)?.seq ?? 0) - 1
@@ -277,7 +301,7 @@ describe('sessions.fork', () => {
 
   it('rejects an in-log anchor whose turn is still open', async () => {
     const ctx = await composed()
-    const source = liveAgent(ctx, 'session-open', 1, 'open')
+    const source = await liveAgent(ctx, 'session-open', 1, 'open')
     const anchor = source.events.at(-1)?.seq ?? 0
     const response = await api(ctx).sessions.fork(request({ sessionId: source.id, atSeq: anchor }))
     expect(response.result).toMatchObject({
@@ -290,7 +314,7 @@ describe('sessions.fork', () => {
 
   it('installs the latest logged model selection before the child can run', async () => {
     const ctx = await composed()
-    const source = liveAgent(ctx, 'session-routed', 1)
+    const source = await liveAgent(ctx, 'session-routed', 1)
     source.append('request/header', {
       header: {
         config: {

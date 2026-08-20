@@ -28,6 +28,8 @@ function bench(options: {
   /** Every registered projection unit throws on this child's payloads. */
   projectionsThrow?: true
   historyParent?: SessionId
+  /** Exact factory seed-fork declaration returned without activating the child. */
+  forkFromSeed?: boolean
 } = {}) {
   const parent = { id: PARENT }
   const child = options.childStatus === undefined
@@ -38,6 +40,9 @@ function bench(options: {
     if (id === CHILD) return child
     return undefined
   })
+  const sessionCapabilities = vi.fn((id: SessionId) => id === CHILD && options.forkFromSeed !== undefined
+    ? { forkFromSeed: options.forkFromSeed }
+    : undefined)
   const listChildren = vi.fn(() => options.listError === undefined
     ? Promise.resolve(options.entries ?? [
       {
@@ -81,7 +86,7 @@ function bench(options: {
     return { snapshot: coldBlock }
   })
   const ctx = new Context()
-  ctx.provide('agents', { get: getAgent })
+  ctx.provide('agents', { get: getAgent, sessionCapabilities })
   ctx.provide('subagents', { listChildren, followup, interrupt })
   ctx.provide('sessions', {
     get: (id: SessionId) => options.liveChild === true && id === CHILD
@@ -105,7 +110,9 @@ function bench(options: {
   const api = createApiProxy(ctx, {
     defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp',
   })
-  return { api, getAgent, listChildren, inspect, snapshot, restore, followup, interrupt, parent }
+  return {
+    api, getAgent, sessionCapabilities, listChildren, inspect, snapshot, restore, followup, interrupt, parent,
+  }
 }
 
 describe('subagent gateway', () => {
@@ -164,6 +171,44 @@ describe('subagent gateway', () => {
     expect(getAgent).not.toHaveBeenCalled()
   })
 
+  it('advertises only fail-closed fork authority across every authorized addressed tail', async () => {
+    const declarations = [true, false, undefined] as const
+    const modes = ['continuable', 'one-shot'] as const
+    const residencies = [false, true] as const
+
+    for (const liveChild of residencies) {
+      for (const mode of modes) {
+        for (const declaration of declarations) {
+          const current = bench({
+            ...(liveChild ? { liveChild: true as const } : {}),
+            ...(declaration === undefined ? {} : { forkFromSeed: declaration }),
+            entries: [{
+              kind: 'child', id: CHILD, mode,
+              ...(mode === 'continuable' ? { label: 'worker' } : { label: 'batch' }),
+              activity: 'inactive', hasChildren: false,
+            }],
+          })
+          const response = await current.api.subagents.history(request({
+            parentSessionId: PARENT, childSessionId: CHILD, mode, maxMessages: 10,
+          }))
+          expect(response.result).toMatchObject({
+            ok: true,
+            value: { capabilities: { fork: declaration === true } },
+          })
+          expect(current.sessionCapabilities).toHaveBeenCalledExactlyOnceWith(CHILD)
+          expect(current.getAgent).not.toHaveBeenCalled()
+        }
+      }
+    }
+
+    const older = bench({ forkFromSeed: true })
+    const olderResponse = await older.api.subagents.history(request({
+      parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable', beforeSeq: 1, maxMessages: 10,
+    }))
+    if (olderResponse.result.ok) expect('capabilities' in olderResponse.result.value).toBe(false)
+    expect(older.sessionCapabilities).not.toHaveBeenCalled()
+  })
+
   it('serves a live child from the in-memory snapshot and the watermark projections', async () => {
     const { api, inspect, snapshot, restore } = bench({ liveChild: true })
     const response = await api.subagents.history(request({
@@ -201,7 +246,7 @@ describe('subagent gateway', () => {
     expect(live.snapshot).toHaveBeenCalledTimes(1)
   })
 
-  it('reads one-shot history and rejects an address with the wrong mode', async () => {
+  it('reads one-shot history and rejects an address with the wrong mode before capability lookup', async () => {
     const oneShot = {
       kind: 'child', id: CHILD, mode: 'one-shot', label: 'batch',
       activity: 'inactive', hasChildren: false,
@@ -214,12 +259,18 @@ describe('subagent gateway', () => {
       parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
     }))).result).toMatchObject({ ok: false, error: { code: 'subagent-not-found' } })
     expect(inspect).toHaveBeenCalledTimes(1)
+
+    const wrong = bench({ entries: [oneShot], forkFromSeed: true })
+    expect((await wrong.api.subagents.history(request({
+      parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
+    }))).result).toMatchObject({ ok: false, error: { code: 'subagent-not-found' } })
+    expect(wrong.sessionCapabilities).not.toHaveBeenCalled()
   })
 
   it('rejects a diagnostic address before reading history', async () => {
-    const { api, inspect } = bench({ entries: [
+    const { api, inspect, sessionCapabilities } = bench({ entries: [
       { kind: 'diagnostic', id: CHILD, reason: 'unsupported' },
-    ] })
+    ], forkFromSeed: true })
     const response = await api.subagents.history(request({
       parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
     }))
@@ -231,6 +282,19 @@ describe('subagent gateway', () => {
       },
     })
     expect(inspect).not.toHaveBeenCalled()
+    expect(sessionCapabilities).not.toHaveBeenCalled()
+  })
+
+  it('rejects changed lineage before reading capability authority', async () => {
+    const changed = bench({ historyParent: sid('replacement-parent'), forkFromSeed: true })
+    const response = await changed.api.subagents.history(request({
+      parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
+    }))
+    expect(response.result).toMatchObject({
+      ok: false,
+      error: { code: 'subagent-unauthorized' },
+    })
+    expect(changed.sessionCapabilities).not.toHaveBeenCalled()
   })
 
   it('maps the missing projections capability to one wire face on list, history, and prompt', async () => {
@@ -252,6 +316,7 @@ describe('subagent gateway', () => {
       parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
     }))).result).toMatchObject({ ok: false, error: expected })
     expect(history.inspect).not.toHaveBeenCalled()
+    expect(history.sessionCapabilities).not.toHaveBeenCalled()
 
     const prompt = bench({ listError: listError() })
     expect((await prompt.api.subagents.prompt(request({
@@ -344,6 +409,7 @@ describe('subagent gateway', () => {
         details: { parentSessionId: PARENT, childSessionId: CHILD },
       },
     })
+    expect(disappeared.sessionCapabilities).not.toHaveBeenCalled()
 
     const catalog = bench({ listError: new Error('secret descriptor') })
     expect((await catalog.api.subagents.list(request({

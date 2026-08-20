@@ -12,17 +12,16 @@
  * card; the in-menu strip with Retry remains the catalog-load surface.
  */
 import {
-  useEffect, useId, useMemo, useRef, useState, useSyncExternalStore,
+  useEffect, useId, useMemo, useRef, useState,
   type KeyboardEvent, type FocusEvent,
 } from 'react'
 import clsx from 'clsx'
 import type { ModelReasoningEffort, ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
-import type { UseConversationSession } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   IconCheckOutline16, IconChevronDownOutline14, IconChevronRightOutline14,
   IconWarningOutline16, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelSelectInjected } from './slots.ts'
 import css from './ModelSelect.module.css'
 
@@ -37,21 +36,21 @@ interface EffortChoice {
   description?: string
 }
 
+/** Complete model-seat props derived from the runtime, inject, and locale shares. */
+export type ModelSelectProps =
+  PropsRuntime<'conversation.input.model'>
+  & InjectFace<ModelSelectInjected>
+  & PropsLocale<'model'>
+
 /**
  * Render the composer model seat.
  * @param props - owner share (locked) + injected face (shared directory
  * store/verbs) + the standard locale seat.
  * @returns the trigger and, while open, the two-level menu.
  */
-export function ModelSelect(
-  { locked, useSession, directory, load, select, t }:
-  ModelSelectInjected & { locked: boolean; useSession: UseConversationSession } & PropsLocale<'model'>,
-) {
+export function ModelSelect({ locked, useSession, useDirectory, load, select, t }: ModelSelectProps) {
   const available = useSession(snapshot => snapshot.subagent === null)
-  const state = useSyncExternalStore(
-    fn => directory.subscribe(fn),
-    () => directory.getSnapshot(),
-  )
+  const state = useDirectory(snapshot => snapshot)
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<Pane>('root')
   // The in-menu error strip serves catalog loads (its Retry re-runs the
@@ -171,16 +170,13 @@ export function ModelSelect(
     close()
   }
 
-  const settleSelection = (accepted: boolean): void => {
-    if (accepted) {
+  const settleSelection = (error: string | null): void => {
+    if (error === null) {
       if (rootRef.current !== null) close(true)
       return
     }
-    const message = directory.getSnapshot().error
-    if (message !== null) {
-      toastSeq.current += 1
-      setToast({ seq: toastSeq.current, text: t('error.action', { message }) })
-    }
+    toastSeq.current += 1
+    setToast({ seq: toastSeq.current, text: t('error.action', { message: error }) })
   }
 
   const choose = (selection: ModelSelection): void => {

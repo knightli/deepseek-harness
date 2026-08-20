@@ -130,10 +130,18 @@ async function bench() {
   const sessionsById = new Map<SessionId, Session>()
   const addressed = new Set<SessionId>()
   ctx.provide('sessions', {
+    list: {
+      getSnapshot: () => ({ ids: [...sessionsById.keys()], current: undefined }),
+      subscribe: () => () => {},
+    },
     scope: (id: SessionId) => scopes.get(id),
     sessionOf: (scope: Context) => sessionsByScope.get(scope),
-    invalidateModelDirectories: () => {
-      for (const session of sessionsById.values()) session.invalidateModels()
+    binding: (id: SessionId) => {
+      const session = sessionsById.get(id)
+      const scope = scopes.get(id)
+      return session === undefined || scope === undefined
+        ? undefined
+        : { sessionId: id, session, ctx: scope }
     },
     subagentAddress: (id: SessionId) => addressed.has(id)
       ? { parentSessionId: sid('parent'), childSessionId: id, mode: 'continuable' as const }
@@ -215,13 +223,13 @@ describe('ui-model-selection dual entry', () => {
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'max',
-    })).toBe(true)
+    })).toBeNull()
     expect(b.hostCurrent()).toEqual({
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'max',
     })
-    expect(seatFace.directory.getSnapshot().current).toEqual({
+    expect(seatFace.hooks.directory.getSnapshot().current).toEqual({
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'max',
@@ -238,7 +246,7 @@ describe('ui-model-selection dual entry', () => {
     const options = await b.contribution().ui.options(projection('s1'), new AbortController().signal)
     const pro = options.find((o: SelectOption) => o.label === 'DeepSeek-V4-Pro')!
     await b.contribution().ui.onSelect(pro, projection('s1'))
-    expect(seatFace.directory.getSnapshot().current).toEqual({
+    expect(seatFace.hooks.directory.getSnapshot().current).toEqual({
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'high',
@@ -252,10 +260,10 @@ describe('ui-model-selection dual entry', () => {
     const faceA = b.seat().inject!(sid('a'))
     const faceA2 = b.seat().inject!(sid('a'))
     const faceB = b.seat().inject!(sid('b'))
-    expect(faceA.directory).toBe(faceA2.directory)
-    expect(faceA.directory).not.toBe(faceB.directory)
+    expect(faceA.hooks.directory).toBe(faceA2.hooks.directory)
+    expect(faceA.hooks.directory).not.toBe(faceB.hooks.directory)
     // The service face resolves the same instance the seat inject handed out.
-    expect(b.ctx.modelDirectories.directoryFor(sid('a')).store).toBe(faceA.directory)
+    expect(b.ctx.modelDirectories.directoryFor(sid('a')).store).toBe(faceA.hooks.directory)
   })
 
   it('drops an unconsumed local selection and restores the Host target after reconnect', async () => {
@@ -266,9 +274,9 @@ describe('ui-model-selection dual entry', () => {
     b.setHostCurrent({ provider: 'deepseek-official', model: 'deepseek-v4-flash' })
 
     b.reconnect(sid('s1'), 1)
-    expect(face.directory.getSnapshot()).toMatchObject({ current: null, status: 'loading' })
+    expect(face.hooks.directory.getSnapshot()).toMatchObject({ current: null, status: 'loading' })
     await Promise.resolve()
-    expect(face.directory.getSnapshot()).toMatchObject({
+    expect(face.hooks.directory.getSnapshot()).toMatchObject({
       current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
       status: 'ready',
     })
@@ -281,7 +289,7 @@ describe('ui-model-selection dual entry', () => {
     await first.fiber.dispose()
     b.mint('s1')
     const face2 = b.seat().inject!(sid('s1'))
-    expect(face2.directory).toBe(face1.directory)
+    expect(face2.hooks.directory).toBe(face1.hooks.directory)
   })
 
   it('invalidates a resident Session whose UI directory was never materialized', async () => {
@@ -293,7 +301,7 @@ describe('ui-model-selection dual entry', () => {
     b.setHostCurrent({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
 
     b.ctx.remote.$dispatch('llm/adapters-updated', [])
-    expect(b.calls.models).toBe(1)
+    expect(b.calls.models).toBe(2)
     const models = await b.ctx.modelDirectories.directoryFor(sid('offscreen')).load()
 
     expect(b.calls.models).toBe(2)
@@ -311,7 +319,7 @@ describe('ui-model-selection dual entry', () => {
     b.setHostCurrent({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
 
     b.ctx.remote.$dispatch('settings/document-updated', ['llm-deepseek', 1])
-    expect(b.calls.models).toBe(1)
+    expect(b.calls.models).toBe(2)
     b.mint('offscreen')
     const models = await b.ctx.modelDirectories.directoryFor(sid('offscreen')).load()
 
@@ -326,14 +334,14 @@ describe('ui-model-selection dual entry', () => {
     const face = b.seat().inject!(sid('s1'))
     await Promise.resolve()
     await Promise.resolve()
-    expect(face.directory.getSnapshot().status).toBe('error')
+    expect(face.hooks.directory.getSnapshot().status).toBe('error')
     expect(b.calls.models).toBe(1)
 
     face.load()
     await Promise.resolve()
     await Promise.resolve()
     expect(b.calls.models).toBe(2)
-    expect(face.directory.getSnapshot().status).toBe('ready')
+    expect(face.hooks.directory.getSnapshot().status).toBe('ready')
   })
 
   it('blocks the composer only once the Host reports the route unservable', async () => {
@@ -374,7 +382,7 @@ describe('ui-model-selection dual entry', () => {
     face.load()
     await Promise.resolve()
     await Promise.resolve()
-    const snapshot = face.directory.getSnapshot()
+    const snapshot = face.hooks.directory.getSnapshot()
     expect(snapshot.groups.flatMap(group => group.models.map(model => model.id))).not.toContain('unlisted')
     expect(b.blockOf('s1')).toBeUndefined()
   })
@@ -410,7 +418,8 @@ describe('ui-model-selection dual entry', () => {
 
     const face = b.seat().inject!(sid('child'))
     face.load()
-    await expect(face.select({ provider: 'deepseek', model: 'deepseek-v4-pro' })).resolves.toBe(false)
+    await expect(face.select({ provider: 'deepseek', model: 'deepseek-v4-pro' }))
+      .resolves.toMatch(/addressed subagent/)
     await expect(b.ctx.modelDirectories.directoryFor(sid('child')).load())
       .rejects.toThrow(/unavailable for addressed subagent/)
     await expect(b.ctx.modelDirectories.directoryFor(sid('child')).select({

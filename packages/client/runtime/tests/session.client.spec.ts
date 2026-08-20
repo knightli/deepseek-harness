@@ -417,6 +417,94 @@ describe('capability snapshot', () => {
     expect(session.modelDirectory.getSnapshot()).toMatchObject({ status: 'idle' })
   })
 
+  it('retracts addressed fork authority on disconnect and restores it only from the ready generation', async () => {
+    const api = new FakeApiClient()
+    api.onSubagentHistory = () => Promise.resolve(ok({
+      events: [],
+      hasMore: false,
+      capabilities: { fork: true },
+    }))
+    const session = new Session(SID, api, fakeRemote(), {
+      conversation: TEST_CONVERSATION,
+      address: { parentSessionId: PARENT, childSessionId: SID, mode: 'continuable' },
+    })
+
+    await session.open()
+
+    expect(api.callsOf('session.models')).toHaveLength(0)
+    expect(session.getSnapshot().sessionCapabilities).toBeUndefined()
+    expect(session.getSnapshot().forkAvailable).toBe(true)
+
+    session.handleDisconnected()
+    expect(session.getSnapshot().forkAvailable).toBeUndefined()
+
+    session.handleGenerationStart(2)
+    expect(session.getSnapshot().forkAvailable).toBeUndefined()
+    session.handleConnected(2)
+    await vi.waitFor(() => {
+      expect(session.getSnapshot().forkAvailable).toBe(true)
+    })
+    expect(api.callsOf('session.models')).toHaveLength(0)
+  })
+
+  it('fences addressed tail capabilities across connection generations and address supersession', async () => {
+    const api = new FakeApiClient()
+    const stale = deferred<Awaited<ReturnType<FakeApiClient['onSubagentHistory']>>>()
+    api.onSubagentHistory = () => stale.promise
+    const session = new Session(SID, api, fakeRemote(), {
+      conversation: TEST_CONVERSATION,
+      address: { parentSessionId: PARENT, childSessionId: SID, mode: 'continuable' },
+    })
+    const staleOpen = session.open()
+
+    api.onSubagentHistory = () => Promise.resolve(ok({
+      events: [],
+      hasMore: false,
+      capabilities: { fork: false },
+    }))
+    session.configureSubagent({
+      parentSessionId: 'replacement-parent' as SessionId,
+      childSessionId: SID,
+      mode: 'continuable',
+    }, true)
+    await vi.waitFor(() => {
+      expect(session.getSnapshot().openState).toBe('open')
+    })
+    expect(session.getSnapshot().forkAvailable).toBe(false)
+
+    stale.resolve(ok({
+      events: [],
+      hasMore: false,
+      capabilities: { fork: true },
+    }))
+    await staleOpen
+    expect(session.getSnapshot().forkAvailable).toBe(false)
+
+    session.handleGenerationStart(4)
+    expect(session.getSnapshot().forkAvailable).toBeUndefined()
+  })
+
+  it('does not reinstall a late addressed capability during disconnect backoff', async () => {
+    const api = new FakeApiClient()
+    const late = deferred<Awaited<ReturnType<FakeApiClient['onSubagentHistory']>>>()
+    api.onSubagentHistory = () => late.promise
+    const session = new Session(SID, api, fakeRemote(), {
+      conversation: TEST_CONVERSATION,
+      address: { parentSessionId: PARENT, childSessionId: SID, mode: 'continuable' },
+    })
+    const opening = session.open()
+
+    session.handleDisconnected()
+    late.resolve(ok({
+      events: [],
+      hasMore: false,
+      capabilities: { fork: true },
+    }))
+    await opening
+
+    expect(session.getSnapshot().forkAvailable).toBeUndefined()
+  })
+
   it('fences a late model selection across disconnect and address changes', async () => {
     const api = new FakeApiClient()
     const select = deferred<Awaited<ReturnType<FakeApiClient['onSelectModel']>>>()

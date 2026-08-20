@@ -41,16 +41,15 @@ export class ModelDirectoryResolver extends Service {
 
   /**
    * @param ctx - owning root context (the service registers itself as `models`).
-   * @param config - the bound translator for this plugin's own dictionary.
+   * @param config - this plugin's copy source and private owner-event refresh capability.
    */
-  constructor(ctx: Context, config: { blockReason: () => string }) {
+  constructor(ctx: Context, config: { blockReason: () => string; refreshSessions: () => void }) {
     super(ctx, 'modelDirectories')
     this.blockReason = config.blockReason
-    const sessions = ctx.get('sessions') as SessionRuntime
     // Either source can change the directory: registry topology commits and
     // settings documents that carry provider catalogs or default selection.
     const refresh = (): void => {
-      sessions.invalidateModelDirectories()
+      config.refreshSessions()
       for (const directory of this.live.directories.values()) {
         directory.load().catch(() => undefined)
       }

@@ -10,14 +10,16 @@ import type { ModelDirectoryState } from './directory.ts'
 
 /** Injected business face of the composer model seat. */
 export interface ModelSelectInjected {
-  /** The session's shared directory store (same instance the /model popup reads). */
-  directory: ObservableSnapshot<ModelDirectoryState>
+  hooks: {
+    /** Session-owned directory bound by the renderer as useDirectory. */
+    directory: ObservableSnapshot<ModelDirectoryState>
+  }
   /** Refresh the advisory directory (fire-and-forget; errors land on the store). */
   load: () => void
   /**
    * Select a complete provider/model/reasoning selection.
    * @param selection - model selection and optional adapter-owned effort.
-   * @returns whether the host accepted the selection.
+   * @returns failure text, or null when the host accepts the selection.
    */
-  select: (selection: ModelSelection) => Promise<boolean>
+  select: (selection: ModelSelection) => Promise<string | null>
 }

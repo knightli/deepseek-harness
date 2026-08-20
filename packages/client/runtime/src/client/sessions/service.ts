@@ -408,11 +408,6 @@ export class SessionRuntime implements ISessions {
     return this.manager.refreshSubagents(parentSessionId)
   }
 
-  /** Retract model-directory facts from all resident sessions after a Host owner event. */
-  invalidateModelDirectories(): void {
-    this.manager.invalidateModelDirectories()
-  }
-
   noteAgentPreset(sessionId: SessionId, agentPreset: string): void {
     this.manager.noteAgentPreset(sessionId, agentPreset)
   }

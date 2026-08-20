@@ -114,7 +114,19 @@ export function apply(ctx: ClientContext): void {
 
   // The composer-block reason is this plugin's own copy, read at raise time so
   // a locale change reaches the next publish.
-  ctx.plugin(ModelDirectoryResolver, { blockReason: () => t('blocked.composer') })
+  const refreshSessions = (): void => {
+    const snapshot = ctx.sessions.list.getSnapshot()
+    const ids = new Set(snapshot.ids)
+    if (snapshot.current !== undefined) ids.add(snapshot.current)
+    for (const sessionId of ids) {
+      const refresh = ctx.sessions.binding(sessionId)?.session.refreshModels()
+      if (refresh !== undefined) void refresh
+    }
+  }
+  ctx.plugin(ModelDirectoryResolver, {
+    blockReason: () => t('blocked.composer'),
+    refreshSessions,
+  })
 
   // Entry 1: the /model popupSelect over the shared directory. The command
   // description is registry-held text: it reads t() once at registration and
@@ -159,9 +171,17 @@ export function apply(ctx: ClientContext): void {
       inject: (sessionId): ModelSelectInjected => {
         const directory = models.directoryFor(sessionId)
         return {
-          directory: directory.store,
+          hooks: { directory: directory.store },
           load: () => { directory.load().catch(() => { /* surfaced on the store */ }) },
-          select: (selection: ModelSelection) => directory.select(selection).then(() => true, () => false),
+          select: async (selection: ModelSelection) => {
+            try {
+              await directory.select(selection)
+              return null
+            } catch (error) {
+              return directory.store.getSnapshot().error
+                ?? (error instanceof Error ? error.message : String(error))
+            }
+          },
         }
       },
     }, ModelSelect))

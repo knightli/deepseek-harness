@@ -12,6 +12,7 @@ import { emitAgentEvent } from '@deepseek-ai/dsh-agent'
 import type {
   Agent,
   AgentFactory,
+  AgentFactorySessionCapabilities,
   AgentHandle,
   AgentOptions,
   AgentSetup,
@@ -295,6 +296,9 @@ function validateConfiguredAgents(agents: Config['agents']): void {
 /** Concrete agent factory and driver service. */
 export class AgentLoop extends Service implements AgentFactory {
   static inject = ['agents', 'sessions', 'llm', 'tools', 'systemPrompt']
+
+  /** Seeded creation is the implementation used by the Host's ordinary Session fork. */
+  readonly sessionCapabilities: AgentFactorySessionCapabilities = { forkFromSeed: true }
 
   /** Runtime schema for declarative agents. */
   static Config = z.object({

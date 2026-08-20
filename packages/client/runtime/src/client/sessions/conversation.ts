@@ -435,6 +435,8 @@ export interface ConversationSnapshot {
   sessionId: SessionId
   /** Host-advertised operation support for this ready connection generation. */
   sessionCapabilities: SessionCapabilities | undefined
+  /** Fork admission from the ordinary model authority or an authorized addressed history tail. */
+  forkAvailable?: boolean
   /** Registered target snapshots assembled from Session events. */
   views: ConversationViewSnapshotStore
   /** Final Chat target assembled from independently registered business Definitions. */

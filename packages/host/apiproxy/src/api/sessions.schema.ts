@@ -246,15 +246,18 @@ export const sessionModelsRequestSchema = z.object({
   sessionId: sessionIdSchema,
 }) satisfies z.ZodType<Wire<RequestPayload<'session.models'>>>
 
+/** Session operation admission shared by ordinary model reads and addressed history tails. */
+export const sessionCapabilitiesSchema = z.object({
+  imageInput: z.boolean(),
+  modelSelection: z.boolean(),
+  fork: z.boolean(),
+})
+
 /** session.models response value. */
 export const sessionModelsValueSchema = z.object({
   current: modelSelectionSchema,
   routable: z.boolean(),
-  capabilities: z.object({
-    imageInput: z.boolean(),
-    modelSelection: z.boolean(),
-    fork: z.boolean(),
-  }),
+  capabilities: sessionCapabilitiesSchema,
   groups: z.array(modelProviderGroupSchema),
   failures: z.array(modelCatalogFailureSchema),
 }) satisfies z.ZodType<Wire<ResponseValue<'session.models'>>>

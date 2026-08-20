@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { conversationSnapshot } from '@deepseek-ai/dsh-client-test-runtime'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ConversationSnapshot, SessionId, UseConversationSession } from '@deepseek-ai/dsh-client-runtime/client'
+import type {
+  ConversationSnapshot, SessionId, SnapshotStore, UseConversationSession,
+} from '@deepseek-ai/dsh-client-runtime/client'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { useSyncExternalStore, type ComponentProps } from 'react'
 import type { ModelDirectoryState } from '../src/client/directory.ts'
-import { ModelSelect } from '../src/client/ModelSelect.tsx'
+import { ModelSelect, type ModelSelectProps } from '../src/client/ModelSelect.tsx'
+import type { ModelSelectInjected } from '../src/client/slots.ts'
 import { zh } from '../src/client/locales.ts'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 
@@ -36,6 +40,20 @@ const addressedSnapshot: ConversationSnapshot = {
 }
 const useOrdinarySession: UseConversationSession = selector => selector(ordinarySnapshot)
 const useAddressedSession: UseConversationSession = selector => selector(addressedSnapshot)
+const standardProps = {
+  sessionId: 's1' as SessionId,
+  useProjection: (() => undefined) as ModelSelectProps['useProjection'],
+  useInput: (() => { throw new Error('unused') }) as ModelSelectProps['useInput'],
+  inputActions: {
+    setDraft: () => {},
+    addImages: () => true,
+    removeImage: () => {},
+    pruneImages: () => {},
+    submit: () => {},
+  },
+  useSessions: (() => { throw new Error('unused') }) as ModelSelectProps['useSessions'],
+  useWorkspaces: (() => { throw new Error('unused') }) as ModelSelectProps['useWorkspaces'],
+} satisfies Omit<PropsRuntime<'conversation.input.model'>, 'locked' | 'useSession'>
 
 const reasoning = {
   efforts: [
@@ -63,19 +81,37 @@ function state(overrides: Partial<ModelDirectoryState> = {}): ModelDirectoryStat
   }
 }
 
+function bindDirectory(
+  directory: SnapshotStore<ModelDirectoryState>,
+): ModelSelectProps['useDirectory'] {
+  return selector => useSyncExternalStore(
+    listener => directory.subscribe(listener),
+    () => selector(directory.getSnapshot()),
+  )
+}
+
 afterEach(cleanup)
 
 describe('ModelSelect reasoning effort', () => {
+  it('derives its complete component props from the standard shares', () => {
+    type Expected = PropsRuntime<'conversation.input.model'>
+      & InjectFace<ModelSelectInjected>
+      & PropsLocale<'model'>
+    expectTypeOf<ComponentProps<typeof ModelSelect>>().toEqualTypeOf<Expected>()
+    expectTypeOf<ModelSelectProps>().toEqualTypeOf<Expected>()
+  })
+
   it('renders adapter metadata and submits the effort as part of the session selection', async () => {
     const directory = createSnapshotStore<ModelDirectoryState>(state())
     const select = vi.fn(async (selection: ModelSelection) => {
       directory.set(state({ current: selection }))
-      return true
+      return null
     })
     render(<ModelSelect
+      {...standardProps}
       locked={false}
       useSession={useOrdinarySession}
-      directory={directory}
+      useDirectory={bindDirectory(directory)}
       load={vi.fn()}
       select={select}
       t={t}
@@ -114,11 +150,12 @@ describe('ModelSelect reasoning effort', () => {
       current: { provider: 'provider', model: 'model' },
     }))
     render(<ModelSelect
+      {...standardProps}
       locked={false}
       useSession={useOrdinarySession}
-      directory={directory}
+      useDirectory={bindDirectory(directory)}
       load={vi.fn()}
-      select={vi.fn().mockResolvedValue(true)}
+      select={vi.fn().mockResolvedValue(null)}
       t={t}
     />)
 
@@ -134,11 +171,12 @@ describe('ModelSelect reasoning effort', () => {
     const directory = createSnapshotStore(state({
       current: { provider: 'deepseek-official', model: 'removed-model' },
     }))
-    const select = vi.fn().mockResolvedValue(true)
+    const select = vi.fn().mockResolvedValue(null)
     render(<ModelSelect
+      {...standardProps}
       locked={false}
       useSession={useOrdinarySession}
-      directory={directory}
+      useDirectory={bindDirectory(directory)}
       load={vi.fn()}
       select={select}
       t={t}
@@ -165,12 +203,13 @@ describe('ModelSelect reasoning effort', () => {
     const directory = createSnapshotStore<ModelDirectoryState>(state({ groups }))
     const select = vi.fn(async () => {
       directory.set(state({ groups, status: 'error', error: 'model-unavailable: session already contains images' }))
-      return false
+      return 'model-unavailable: session already contains images'
     })
     render(<ModelSelect
+      {...standardProps}
       locked={false}
       useSession={useOrdinarySession}
-      directory={directory}
+      useDirectory={bindDirectory(directory)}
       load={vi.fn()}
       select={select}
       t={t}
@@ -187,12 +226,14 @@ describe('ModelSelect reasoning effort', () => {
 
   it('renders no Agent-bound control for an addressed subagent session', () => {
     const load = vi.fn()
+    const directory = createSnapshotStore(state())
     render(<ModelSelect
+      {...standardProps}
       locked={false}
       useSession={useAddressedSession}
-      directory={createSnapshotStore(state())}
+      useDirectory={bindDirectory(directory)}
       load={load}
-      select={vi.fn().mockResolvedValue(false)}
+      select={vi.fn().mockResolvedValue(null)}
       t={t}
     />)
 
@@ -207,12 +248,14 @@ describe('ModelSelect reasoning effort', () => {
       () => selector(session.getSnapshot()),
     )
     const load = vi.fn()
+    const directory = createSnapshotStore(state())
     render(<ModelSelect
+      {...standardProps}
       locked={false}
       useSession={useSession}
-      directory={createSnapshotStore(state())}
+      useDirectory={bindDirectory(directory)}
       load={load}
-      select={vi.fn().mockResolvedValue(true)}
+      select={vi.fn().mockResolvedValue(null)}
       t={t}
     />)
     expect(screen.getByRole('button')).toBeTruthy()

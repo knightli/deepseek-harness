@@ -80,7 +80,8 @@ describe('web e2e: persisted subagent conversation and human continuation', () =
       replayChildFixtures: [childFixturePath],
       paceMs: 25,
     })
-    browser = await chromium.launch()
+    const executablePath = process.env.DSH_PLAYWRIGHT_EXECUTABLE_PATH
+    browser = await chromium.launch(executablePath === undefined ? {} : { executablePath })
     page = await newEnglishPage(browser)
     page.on('request', (request) => {
       const path = new URL(request.url()).pathname
@@ -244,6 +245,22 @@ describe('web e2e: persisted subagent conversation and human continuation', () =
     }
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) throw new AggregateError(failures, 'subagent Web teardown failed')
+  })
+
+  it('shows the model seat only while the mounted conversation uses ordinary transport', async () => {
+    const modelTrigger = page.getByRole('button', { name: /^Select model(?:,|$)/ })
+    await modelTrigger.waitFor({ timeout: 15_000 })
+    expect(await modelTrigger.count()).toBe(1)
+
+    await page.getByRole('button', { name: '3 subagents' }).click()
+    await page.getByRole('treeitem', { name: new RegExp(LABEL) }).click()
+    await expect.poll(() => modelTrigger.count(), { timeout: 15_000 }).toBe(0)
+
+    await page.getByRole('tree', { name: 'Sessions' })
+      .getByRole('treeitem', { name: /Ask a research subagent to/ })
+      .click()
+    await modelTrigger.waitFor({ timeout: 15_000 })
+    expect(await modelTrigger.count()).toBe(1)
   })
 
   it('keeps known descendants reachable across a stale empty catalog response', async () => {

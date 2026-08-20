@@ -2474,7 +2474,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async fork(request) {
         const { sessionId, atSeq } = request.payload
-        if (ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed === false) {
+        if (ctx.agents.sessionCapabilities(sessionId)?.forkFromSeed !== true) {
           return err(request, {
             code: 'fork-unavailable',
             message: 'fork is unavailable for this session',
@@ -2894,7 +2894,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         const page = historyPage(ctx, events, beforeSeq, maxMessages)
-        return ok(request, { ...page, ...projections === undefined ? {} : { projections } })
+        const capabilities = beforeSeq === undefined
+          ? {
+            fork: ctx.agents.sessionCapabilities(childSessionId)?.forkFromSeed === true,
+          }
+          : undefined
+        return ok(request, {
+          ...page,
+          ...projections === undefined ? {} : { projections },
+          ...capabilities === undefined ? {} : { capabilities },
+        })
       },
 
       async prompt(request, signal) {

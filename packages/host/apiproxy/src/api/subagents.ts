@@ -86,6 +86,8 @@ export interface SubagentsApi {
     events: HistoryEntry[]
     hasMore: boolean
     projections?: SessionProjectionsBlock
+    /** Fail-closed fork admission for this authorized addressed tail. */
+    capabilities?: { fork: boolean }
   }>>
 
   /**

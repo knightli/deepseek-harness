@@ -109,6 +109,10 @@ export class Session implements SessionFace {
   private modelRequest: { generation: number; promise: Promise<RpcResult<SessionModels>> } | null = null
   /** Latest model operation wins and generation teardown fences every late settlement. */
   private modelRequestNonce = 0
+  /** Address/capability authority epoch; teardown bumps it even before a new physical generation exists. */
+  private capabilityEpoch = 0
+  /** Fork-only authority from the current authorized addressed history tail. */
+  private addressedForkAvailable: boolean | undefined
   /** Authoritative stream-only inbox snapshot; pending work never hits history. */
   private readonly queueMirror = new SessionQueueMirror()
   /** Session-owned business Context engine over the contiguous raw window. */
@@ -327,13 +331,8 @@ export class Session implements SessionFace {
 
   /** Explicit owner-event invalidation of the SessionModels authority. */
   refreshModels(): Promise<RpcResult<SessionModels>> {
-    this.invalidateModels()
-    return this.readModels()
-  }
-
-  /** Retract all cached model facts without starting a replacement read. */
-  invalidateModels(): void {
     this.clearModelDirectory()
+    return this.readModels()
   }
 
   /** Select one complete model route and settle the shared directory projection. */
@@ -582,12 +581,14 @@ export class Session implements SessionFace {
     this.connectionGeneration = generation
     this.answerableGeneration = null
     this.clearModelDirectory()
+    this.clearAddressedForkCapability()
   }
 
   /** Preserve visible waits while making every retained carrier locally unavailable. */
   handleDisconnected(): void {
     this.answerableGeneration = null
     this.clearModelDirectory()
+    this.clearAddressedForkCapability()
   }
 
   /**
@@ -695,6 +696,7 @@ export class Session implements SessionFace {
     this.parentAvailable = parentAvailable
     if (!same) {
       this.clearModelDirectory()
+      this.clearAddressedForkCapability()
       if (address === undefined && this.answerableGeneration !== null) void this.loadModels()
     }
     if (!same && this.openState !== 'cold') void this.resync()
@@ -777,6 +779,9 @@ export class Session implements SessionFace {
   /** @param generation - openGeneration at launch; every await re-checks it and a stale pass
    *  drops all writes (resync superseded this open — its outcome belongs to a dead connection). */
   private async doOpen(generation: number): Promise<void> {
+    const connectionGeneration = this.connectionGeneration
+    const address = this.address
+    const capabilityEpoch = this.capabilityEpoch
     this.openState = 'loading'
     this.openError = null
     this.notifier.markDirty()
@@ -788,13 +793,29 @@ export class Session implements SessionFace {
         this.openError = result.error
         return
       }
-      this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
+      this.installWindow(
+        result.value.events,
+        result.value.hasMore,
+        result.value.projections,
+        result.value.capabilities,
+        connectionGeneration,
+        address,
+        capabilityEpoch,
+      )
       // Gap detection: baseline past the window tail and liveBuffer did not cover it -> pull the tail page once more.
       const tailSeq = this.windowTailSeq()
       if (this.subscribedLastSeq !== null && tailSeq !== null && this.subscribedLastSeq > tailSeq) {
         result = (await this.history({ maxMessages: PAGE_MESSAGES })).result
         if (generation !== this.openGeneration) return
-        if (result.ok) this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
+        if (result.ok) this.installWindow(
+          result.value.events,
+          result.value.hasMore,
+          result.value.projections,
+          result.value.capabilities,
+          connectionGeneration,
+          address,
+          capabilityEpoch,
+        )
       }
       this.openState = 'open'
     } catch (error) {
@@ -815,7 +836,15 @@ export class Session implements SessionFace {
    *  A carried projections block seeds the value store (higher seq wins, so a stale
    *  baseline cannot overwrite a newer push frame); the window events themselves are
    *  never folded — the host is the only computation site. */
-  private installWindow(entries: HistoryEntry[], hasMore: boolean, projections?: ProjectionsBaseline): void {
+  private installWindow(
+    entries: HistoryEntry[],
+    hasMore: boolean,
+    projections?: ProjectionsBaseline,
+    capabilities?: { fork: boolean },
+    connectionGeneration = this.connectionGeneration,
+    address = this.address,
+    capabilityEpoch = this.capabilityEpoch,
+  ): void {
     this.events = entries.map(e => e.event)
     this.views = entries.map(e => e.view)
     this.baseSeq = this.events[0]?.seq ?? 0
@@ -823,6 +852,13 @@ export class Session implements SessionFace {
     if (this.events.some(event => event.type === 'turn/start')) this.firstPromptPendingTurn = false
     this.conversation.replaceWindow(entries.map(conversationInput), hasMore)
     if (projections !== undefined) this.projections.seed(projections)
+    if (capabilities !== undefined && this.isCurrentSessionCapabilitySettlement(
+      capabilityEpoch,
+      connectionGeneration,
+      address,
+    )) {
+      this.addressedForkAvailable = capabilities.fork
+    }
     const buffered = this.liveBuffer
     this.liveBuffer = []
     for (const item of buffered) this.appendLive(item.event, item.view)
@@ -875,11 +911,22 @@ export class Session implements SessionFace {
     if (this.stitching) return
     this.stitching = true
     const generation = this.openGeneration
+    const connectionGeneration = this.connectionGeneration
+    const address = this.address
+    const capabilityEpoch = this.capabilityEpoch
     try {
       const { result } = await this.history({ maxMessages: PAGE_MESSAGES })
       // Failure or superseded by a full resync: drop — the resync path rebuilds and clears the buffer itself.
       if (result.ok && generation === this.openGeneration && this.openState === 'open') {
-        this.installWindow(result.value.events, result.value.hasMore, result.value.projections)
+        this.installWindow(
+          result.value.events,
+          result.value.hasMore,
+          result.value.projections,
+          result.value.capabilities,
+          connectionGeneration,
+          address,
+          capabilityEpoch,
+        )
       }
     } catch (error) {
       console.error('[web-runtime] gap repair failed:', error)
@@ -899,9 +946,13 @@ export class Session implements SessionFace {
     }
     const chat = (this.conversation.snapshot('chat') as ChatSnapshot | undefined) ?? EMPTY_CHAT_SNAPSHOT
     const legacy = chat.legacy
+    const forkAvailable = this.address === undefined
+      ? this.modelDirectorySnapshot.capabilities?.fork
+      : this.addressedForkAvailable
     return {
       sessionId: this.sessionId,
       sessionCapabilities: this.modelDirectorySnapshot.capabilities,
+      ...(forkAvailable === undefined ? {} : { forkAvailable }),
       views: this.conversation,
       chat,
       nodes: legacy.nodes,
@@ -1002,12 +1053,35 @@ export class Session implements SessionFace {
     this.notifier.markDirty()
   }
 
+  /** Retract addressed fork authority and fence every in-flight tail settlement. */
+  private clearAddressedForkCapability(): void {
+    this.capabilityEpoch++
+    if (this.addressedForkAvailable === undefined) return
+    this.addressedForkAvailable = undefined
+    this.notifier.markDirty()
+  }
+
   /** Invalidate the current read/result without publishing a replacement snapshot. */
   private invalidateModelRequest(): void {
     this.modelRequestNonce++
     this.modelRequest = null
     this.modelResult = undefined
     this.modelResultGeneration = null
+  }
+
+  /** Whether an addressed tail's capability fact still owns this exact address and carrier epoch. */
+  private isCurrentSessionCapabilitySettlement(
+    capabilityEpoch: number,
+    connectionGeneration: number,
+    address: SubagentAddress | undefined,
+  ): boolean {
+    return address !== undefined
+      && this.capabilityEpoch === capabilityEpoch
+      && this.connectionGeneration === connectionGeneration
+      && this.answerableGeneration === connectionGeneration
+      && this.address?.parentSessionId === address.parentSessionId
+      && this.address.childSessionId === address.childSessionId
+      && this.address.mode === address.mode
   }
 
   /** Whether an async model settlement still owns the ordinary ready Session. */
@@ -1037,6 +1111,7 @@ export class Session implements SessionFace {
     events: HistoryEntry[]
     hasMore: boolean
     projections?: ProjectionsBaseline
+    capabilities?: { fork: boolean }
   }>> {
     return this.address === undefined
       ? this.api.sessions.history({ sessionId: this.sessionId, ...payload })

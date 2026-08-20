@@ -26,6 +26,14 @@ function send(agent: Agent, text: string): void {
 }
 
 describe('Agent', () => {
+  it('declares that its seeded create path supports ordinary Session forks', async () => {
+    const ctx = await harness(new MockAdapter([]))
+
+    expect(ctx.agentLoop.sessionCapabilities).toEqual({ forkFromSeed: true })
+    expect(ctx.agents.sessionCapabilities(SessionId('cold-session'))).toEqual({ forkFromSeed: true })
+    await ctx.fiber.dispose()
+  })
+
   it('idle inject() durably stages context without opening a turn', async () => {
     const adapter = new MockAdapter([textResponse('ok')])
     const ctx = await harness(adapter)

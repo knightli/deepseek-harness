@@ -160,7 +160,11 @@ export class FakeApiClient implements IApiClient {
 
   onSubagentList: (payload: unknown) => Promise<RpcResponse<{ entries: never[]; parentAvailable: boolean }>>
     = () => Promise.resolve(ok({ entries: [], parentAvailable: true }))
-  onSubagentHistory: (payload: unknown) => Promise<RpcResponse<{ events: never[]; hasMore: boolean }>>
+  onSubagentHistory: (payload: unknown) => Promise<RpcResponse<{
+    events: never[]
+    hasMore: boolean
+    capabilities?: { fork: boolean }
+  }>>
     = () => Promise.resolve(ok({ events: [], hasMore: false }))
   onSubagentPrompt: (payload: unknown) => Promise<RpcResponse<{ messageId: never }>>
     = () => Promise.resolve(ok({ messageId: 'fake-message' as never }))

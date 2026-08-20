@@ -336,11 +336,6 @@ export class SessionManager {
     for (const session of this.sessions.values()) session.rebuildConversationRegistry()
   }
 
-  /** Retract model-directory facts from every resident Session without materializing new instances. */
-  invalidateModelDirectories(): void {
-    for (const session of this.sessions.values()) session.invalidateModels()
-  }
-
   /** Resident per-session projection store (create-on-demand; outlives instantiation). */
   private projectionStore(sessionId: SessionId): ProjectionValueStore {
     let store = this.projectionStores.get(sessionId)

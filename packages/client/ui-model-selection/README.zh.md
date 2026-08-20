@@ -8,9 +8,9 @@ Host 报告的 `ModelSelection` 是唯一的选择事实，其中包含提供方
 
 当 Host 报告 `session.models.routable: false` 时，本插件经 `ctx.conversation.blocks` 注册一个 composer 阻塞块，输入框随之停用并显示本插件自己的文案；恢复后无需重新加载即自动清除。该值跟随 Host 对普通文本的准入，而不只表示适配器是否存在：DSH 适配器服务所选提供方，或实时 Agent 声明 `promptExecution: { kind: 'external-text' }` 时，该值均为 `true`。插件只跟随 `routable`：`null`（首次加载之前，或加载失败之后）绝不阻断，否则一个缓慢的 Host 会锁死本来可用的 composer；目录成员关系同样不阻断。对于 `external-text` Agent，目录只用于兼容显示；`session.selectModel` 返回 `model-unavailable`，目录则保留先前的选择和分组。触发器自己的 `Select model` 回退仍然只是显示，不决定提示词准入（[决策](../../../.agents/notes/implemented/architecture/2026-08-14-external-text-prompt-execution.md)）。
 
-facade 按会话惰性解析（`ctx.modelDirectories.directoryFor(sessionId)`），随会话作用域一并 dispose（资源释放）；底层权威仍保留在常驻 runtime Session 上。composer 入口从框架的常驻 `useSession` 订阅派生可见性，而不是读取一次性注入的 boolean，因此 ordinary／addressed 切换无需重建 identity-stable provide bundle 即可收敛。已寻址 subagent 会话不公开任一入口，Session 会拒绝加载、选择与重连刷新，且不发出绑定普通 Agent 的模型 RPC，因为该 transport 会在直接 parent 继续执行路径之外激活持久化 child 历史。
+facade 按会话惰性解析（`ctx.modelDirectories.directoryFor(sessionId)`），随会话作用域一并 dispose（资源释放）；底层权威仍保留在常驻 runtime Session 上。composer 入口从框架的常驻 `useSession` share 派生可见性，并经 inject `hooks` share 读取目录，因此自身不持有订阅机制，ordinary／addressed 切换也无需重建 identity-stable provide bundle 即可收敛。已寻址 subagent 会话不公开任一入口，Session 会拒绝加载、选择与重连刷新，且不发出绑定普通 Agent 的模型 RPC，因为该 transport 会在直接 parent 继续执行路径之外激活持久化 child 历史。
 
-转发的 owner 事件 `llm/adapters-updated` 与 `settings/document-updated` 会先使 runtime 既有常驻 Session map 中的每个权威失效。存活 facade 随即重新加载；从未 materialize facade 或 facade 已 dispose 的 Session，则必须在下一次 load 时重新读取。因此提供方拓扑、提供方目录与默认选择都能收敛，且无需平行的 UI Session registry 或单独的模型变更别名。
+转发的 owner 事件 `llm/adapters-updated` 与 `settings/document-updated` 会调用本插件持有的私有 capability closure。该 closure 遍历 public sessions list，解析每个 binding，并调用对应 Session 的 `refreshModels`；每次 refresh 都同步撤回陈旧事实并开始一次替换读取，存活 facade 则加入同一个 in-flight 请求。因此提供方拓扑、提供方目录与默认选择都能收敛，且无需平行的 UI Session registry、只有一个消费者的 public runtime method 或单独的模型变更别名。
 
 `/client` 导出面为插件本体（`apply`/`inject`）、`ModelDirectoryResolver`、`ModelDirectory` 及其状态形状、slot 注入面类型。
 

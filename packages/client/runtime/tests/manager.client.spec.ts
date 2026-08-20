@@ -35,25 +35,6 @@ describe('instances', () => {
     expect(session.getSnapshot().running).toBe(true) // list preceded instantiation
   })
 
-  it('invalidates the model authority of every already-resident instance', async () => {
-    const api = new FakeApiClient()
-    const manager = new SessionManager(api, fakeRemote())
-    const first = manager.get(S1)
-    const second = manager.get(S2)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(first.getSnapshot().sessionCapabilities?.modelSelection).toBe(true)
-    expect(second.getSnapshot().sessionCapabilities?.modelSelection).toBe(true)
-
-    manager.invalidateModelDirectories()
-
-    expect(first.getSnapshot().sessionCapabilities).toBeUndefined()
-    expect(second.getSnapshot().sessionCapabilities).toBeUndefined()
-    expect(manager.get(S1)).toBe(first)
-    expect(manager.get(S2)).toBe(second)
-    expect(api.callsOf('session.models')).toHaveLength(2)
-  })
-
   it('replays buffered approval frames on instantiation and drops ordinary frames for uninstantiated sessions', () => {
     const api = new FakeApiClient()
     const manager = new SessionManager(api, fakeRemote())

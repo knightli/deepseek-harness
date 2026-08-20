@@ -78,7 +78,7 @@ reason 为 `max-tokens` 的 `turn/end` 会在该轮位置投影出一个 `turn-m
 
 每个常驻的普通 `Session` 都持有唯一的 `modelDirectory` observable，其中包含当前 `ModelSelection`、`routable`、操作能力、提供方分组、逐提供方失败记录，以及 `idle`／`loading`／`ready`／`selecting`／`error` 生命周期。ready connection generation 中的第一个消费者发起 `session.models`；其他消费者加入同一个 promise 或复用其已结算结果，因此能力控制项与 stock 模型选择器不会从重复读取建立错时投影。`ConversationSnapshot.sessionCapabilities` 派生自同一权威，而 `loadModels`、由 owner 事件显式触发的 `refreshModels` 与 `selectModel` 构成 Session 的完整变更边界。模型选择插件仅通过薄 facade 订阅，不保留第二份 groups／current／routable store。
 
-断连、generation start 与显式 refresh invalidation 会同步撤回目录和 `sessionCapabilities`，使 pending 读取与选择失效，并以 request identity、connection generation、answerable generation 及普通会话地址拦截所有迟到结算。因此 refresh 的业务错误或传输错误会继续保持不可用，而不会恢复陈旧能力。重连只为新 generation 发起一次读取。切换为已寻址 subagent 会清空该权威，且绝不调用绑定普通 Agent 的模型 RPC；切回可响应的普通会话时重新加载。adapter topology 与 settings 的 owner 事件会使 `SessionManager` 中每个已常驻 Session 失效，包括没有存活模型选择 facade 的 Session；存活 facade 会立即重新加载，而离屏 Session 的下一次 load 必须重新读取。选择失败则保留上一次成功目录，同时报告本次操作错误。
+断连、generation start 与显式 refresh invalidation 会同步撤回目录和 `sessionCapabilities`，使 pending 读取与选择失效，并以 request identity、connection generation、answerable generation 及普通会话地址拦截所有迟到结算。因此 refresh 的业务错误或传输错误会继续保持不可用，而不会恢复陈旧能力。重连只为新 generation 发起一次读取。切换为已寻址 subagent 会清空该权威，且绝不调用绑定普通 Agent 的模型 RPC；切回可响应的普通会话时重新加载。已寻址 history tail 只能安装独立拦截的 `forkAvailable` 事实；它绝不会填充 `sessionCapabilities`，因此不能宣称图片或模型权威。拥有外部模型目录事件的功能会经每个相关的 public Session binding 调用 `refreshModels`；每次调用都会先撤回再开始一次替换读取，因此并发消费者会加入该请求。选择失败则保留上一次成功目录，同时报告本次操作错误。
 
 ## 模型体验
 
