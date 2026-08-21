@@ -33,8 +33,6 @@ import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
 import css from './InputBar.module.css'
 
-const IMAGE_INPUT_UNAVAILABLE = 'This session does not support image input.'
-
 /** Decoration product of the no-session state (no machine, empty draft). */
 const INERT_DECORATIONS: DraftDecorations = { token: null, chips: [], textRefs: [], hint: null }
 
@@ -402,7 +400,7 @@ export function InputBar({
       .filter((file): file is File => file !== null)
     if (files.length > 0 && !imageInput) {
       e.preventDefault()
-      showToast(IMAGE_INPUT_UNAVAILABLE)
+      showToast(t('session.imageInputUnavailable'))
       return
     }
     if (files.length > 0) intakeImages(files)
@@ -497,7 +495,7 @@ export function InputBar({
       event.preventDefault()
       reset()
       if (!imageInput) {
-        showToast(IMAGE_INPUT_UNAVAILABLE)
+        showToast(t('session.imageInputUnavailable'))
         return
       }
       if (!canAcceptDrop) return
@@ -515,7 +513,7 @@ export function InputBar({
       document.removeEventListener('drop', onDrop)
       window.removeEventListener('dragend', reset)
     }
-  }, [canAcceptDrop, imageInput, intakeImages, showToast])
+  }, [canAcceptDrop, imageInput, intakeImages, showToast, t])
 
   const closePreview = useCallback(() => { setPreview(null) }, [])
 

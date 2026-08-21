@@ -11,6 +11,7 @@ import {
   createSnapshotStore, EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import type { ClientContext, ConversationSnapshot, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import { SessionInputShell } from '../src/client/input/facade.ts'
@@ -18,7 +19,7 @@ import type { ComposerAttachment } from '../src/client/contract/slots.ts'
 import type { DraftAttachmentId } from '../src/client/input/contract.ts'
 import { InputBar } from '../src/client/skeleton/InputBar.tsx'
 import type { InputBarProps } from '../src/client/skeleton/InputBar.tsx'
-import { zh } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 
 afterEach(cleanup)
 
@@ -220,7 +221,7 @@ async function capabilitiesReady(): Promise<void> {
 }
 
 describe('image draft rail', () => {
-  it('fails closed without mutating the draft or image rail when capability lookup rejects', async () => {
+  it('localizes a rejected image paste in Simplified Chinese without mutating the draft or image rail', async () => {
     const addImages = vi.fn(() => null)
     const { view, textarea, shell } = bench({
       draft: 'keep',
@@ -237,14 +238,14 @@ describe('image draft rail', () => {
     })
 
     await waitFor(() => {
-      expect(view.getByRole('alert').textContent).toContain('This session does not support image input.')
+      expect(view.getByRole('alert').textContent).toContain('当前会话不支持图片输入。')
     })
     expect(addImages).not.toHaveBeenCalled()
     expect(shell.snapshot.draft).toBe('keep')
     expect(shell.snapshot.imageIds).toEqual([])
   })
 
-  it('rejects a file drop when the session explicitly declines image input', async () => {
+  it('localizes a rejected file drop in English when the session explicitly declines image input', async () => {
     const addImages = vi.fn(() => null)
     const { view, shell } = bench({
       draft: 'keep',
@@ -254,6 +255,7 @@ describe('image draft rail', () => {
         modelSelection: true,
         fork: true,
       },
+      t: makeTranslate(en, commonEn),
     })
     await capabilitiesReady()
     const image = new File([Uint8Array.of(1)], 'blocked.png', { type: 'image/png' })
@@ -299,7 +301,7 @@ describe('image draft rail', () => {
         dataTransfer: { types: ['Files'], files: [image], dropEffect: 'none' },
       })
 
-      expect(view.getByRole('alert').textContent).toContain('This session does not support image input.')
+      expect(view.getByRole('alert').textContent).toContain('当前会话不支持图片输入。')
       expect(addImages).not.toHaveBeenCalled()
       expect(shell.snapshot.draft).toBe('keep')
       expect(shell.snapshot.imageIds).toEqual([])
