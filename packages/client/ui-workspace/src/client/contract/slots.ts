@@ -84,6 +84,20 @@ export type DirectoryPickingHooks = {
   useDirectoryFlow: SnapshotSelectorHook<boolean>
 }
 
+/** Stable UI-facing classification for a fork action that could not open a child. */
+export class SessionForkActionError extends Error {
+  override readonly name = 'SessionForkActionError'
+
+  /**
+   * @param outcome - whether Host admission provably created no child, the
+   * child was created before a later setup step failed, or transport left the
+   * publication result unknown.
+   */
+  constructor(readonly outcome: 'not-created' | 'created' | 'unknown') {
+    super(`session fork action failed (${outcome})`)
+  }
+}
+
 /**
  * Browser-private injected share (arrives via the register inject factory).
  * Data reads use the global framework hooks; these are the Host actions the
@@ -110,8 +124,13 @@ export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
   searchResultLimit: number
   /** Rename a Session (explicit user title; resolves on host acceptance). */
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
-  /** Fork a Session at its last completed turn and open the child. */
-  forkSession: (sessionId: SessionId) => void
+  /**
+   * Fork at the last completed turn and open the child. Rejection uses
+   * `SessionForkActionError`: `not-created` means admission failed, while
+   * `created` means the child remains listed after a later setup failure and
+   * `unknown` means the carrier cannot prove whether publication occurred.
+   */
+  forkSession: (sessionId: SessionId) => Promise<void>
   /** Rename a Host Workspace (rejects on name conflict; resolves on durability). */
   renameWorkspace: (workspaceId: WorkspaceId, title: string) => Promise<void>
   /** Delete only a Host Workspace registration; directory and Session logs remain. */

@@ -29,6 +29,7 @@ import { newEnglishPage, saveFailureShot } from './support.ts'
 const SNAPSHOT_DIR = fileURLToPath(new URL('./snapshots/external-text-agent', import.meta.url))
 const PROTOCOL_EXPECTED = join(SNAPSHOT_DIR, 'protocol.expected.json')
 const UI_EXPECTED = join(SNAPSHOT_DIR, 'ui.expected.md')
+const FORK_REJECTION_EXPECTED = join(SNAPSHOT_DIR, 'fork-rejection.expected.md')
 const EXTERNAL_OVERLAY = fileURLToPath(new URL('./external-text-agent.overlay.yml', import.meta.url))
 const STOCK_OVERLAY = fileURLToPath(new URL('./external-text-agent-stock.overlay.yml', import.meta.url))
 const MODE = webSnapshotMode()
@@ -54,6 +55,10 @@ interface ModelsValue {
   capabilities: { imageInput: boolean; modelSelection: boolean; fork: boolean }
   groups: Array<{ id: string }>
   failures: unknown[]
+}
+
+interface SessionListValue {
+  items: Array<{ sessionId: string }>
 }
 
 let rpcOrdinal = 0
@@ -340,6 +345,7 @@ describe('web e2e: external Agent text admission through the shipped application
     const executablePath = process.env.DSH_PLAYWRIGHT_EXECUTABLE_PATH
     browser = await chromium.launch(executablePath === undefined ? {} : { executablePath })
     page = await newEnglishPage(browser)
+    const activePage = page
     const tripwire = watchConsole(page)
     onTestFailed(() => page === undefined
       ? undefined
@@ -350,6 +356,67 @@ describe('web e2e: external Agent text admission through the shipped application
     await titledSession.waitFor({ timeout: 20_000 })
     await titledSession.click()
     await page.getByText(RESUME_QUEUE_REPLY, { exact: true }).waitFor({ timeout: 20_000 })
+
+    // This external AgentFactory declines ordinary Session forks. Drive the
+    // shipped row menu through the real Host carrier and native workspace
+    // surface: both attempts must announce the stable local rejection, while
+    // Host Session/history state and the current selection remain unchanged.
+    const beforeForkList = ok(await rpc<SessionListValue>(second.baseUrl, 'session.list', {}))
+    const beforeForkHistory = ok(await rpc<HistoryPage>(second.baseUrl, 'session.history', {
+      sessionId: SESSION_ID,
+      maxMessages: 30,
+    }))
+    const sessionRow = page.getByRole('treeitem').filter({ hasText: SESSION_TITLE }).first()
+    const selectedBeforeFork = await sessionRow.getAttribute('aria-selected')
+    expect(selectedBeforeFork).toBe('true')
+    expect(await page.locator('[role="treeitem"][aria-selected="true"]').count()).toBe(1)
+    const treeItemCountBeforeFork = await page.getByRole('treeitem').count()
+    const forkThroughNativeMenu = async (): Promise<unknown> => {
+      const forkResponse = activePage.waitForResponse(response => (
+        new URL(response.url()).pathname === '/api/session.fork'
+        && response.request().method() === 'POST'
+      ))
+      await sessionRow.hover()
+      await sessionRow.getByRole('button', {
+        name: `Session actions for ${SESSION_TITLE}`,
+      }).click()
+      await activePage.getByRole('menuitem', { name: 'Fork session', exact: true }).click()
+      const response = await forkResponse
+      return (await response.json() as { result: unknown }).result
+    }
+
+    const firstForkResult = await forkThroughNativeMenu()
+    expect(firstForkResult).toMatchObject({
+      ok: false,
+      error: { code: 'fork-unavailable', details: { sessionId: SESSION_ID } },
+    })
+    const forkAlert = page.getByRole('alert').filter({ hasText: 'Couldn’t fork this session.' })
+    await forkAlert.waitFor({ timeout: 10_000 })
+    const firstAlertHandle = await forkAlert.elementHandle()
+    if (firstAlertHandle === null) throw new Error('first fork rejection alert did not mount')
+
+    const secondForkResult = await forkThroughNativeMenu()
+    expect(secondForkResult).toEqual(firstForkResult)
+    await page.waitForFunction(alert => !alert.isConnected, firstAlertHandle)
+    await forkAlert.waitFor({ timeout: 10_000 })
+    const refusalAria = await captureStableAria(page, '[role="alert"]', second.workspaceCwd)
+    await compareOrRefreshGolden(FORK_REJECTION_EXPECTED, refusalAria, MODE)
+
+    const afterForkList = ok(await rpc<SessionListValue>(second.baseUrl, 'session.list', {}))
+    const afterForkHistory = ok(await rpc<HistoryPage>(second.baseUrl, 'session.history', {
+      sessionId: SESSION_ID,
+      maxMessages: 30,
+    }))
+    expect(afterForkList.items.map(item => item.sessionId))
+      .toEqual(beforeForkList.items.map(item => item.sessionId))
+    expect(afterForkHistory.events).toEqual(beforeForkHistory.events)
+    expect(await sessionRow.getAttribute('aria-selected')).toBe(selectedBeforeFork)
+    expect(await page.locator('[role="treeitem"][aria-selected="true"]').count()).toBe(1)
+    expect(await page.getByRole('treeitem').count()).toBe(treeItemCountBeforeFork)
+    expect(await page.getByText('fork is unavailable for this session', { exact: false }).count()).toBe(0)
+    // Keep the existing stable UI golden free of a transient banner.
+    await forkAlert.waitFor({ state: 'detached', timeout: 6_000 })
+
     expect(await page.getByText(CREATE_QUEUE_REPLY, { exact: true }).count()).toBeGreaterThanOrEqual(1)
     expect(await page.getByText(CREATE_STEER_REPLY, { exact: true }).count()).toBeGreaterThanOrEqual(1)
     await page.locator('textarea:enabled').first().waitFor({ timeout: 10_000 })
@@ -357,6 +424,10 @@ describe('web e2e: external Agent text admission through the shipped application
     await compareOrRefreshGolden(UI_EXPECTED, ui, MODE)
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])
-    await assertFixtureInventory(SNAPSHOT_DIR, ['protocol.expected.json', 'ui.expected.md'])
+    await assertFixtureInventory(SNAPSHOT_DIR, [
+      'fork-rejection.expected.md',
+      'protocol.expected.json',
+      'ui.expected.md',
+    ])
   }, 180_000)
 })

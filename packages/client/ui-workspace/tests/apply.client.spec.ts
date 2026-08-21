@@ -1,10 +1,11 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
-import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import { SessionForkError, SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { usePinnedBrowserLanguages } from '@deepseek-ai/dsh-client-test-runtime'
 import { apply, inject } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from '@deepseek-ai/dsh-client-ui-workspace/client'
+import { SessionForkActionError } from '../src/client/contract/slots.ts'
 import { WorkspaceBrowser } from '../src/client/WorkspaceBrowser.tsx'
 import { WorkspacePicker } from '../src/client/WorkspacePicker.tsx'
 
@@ -98,11 +99,39 @@ describe('ui-workspace apply', () => {
     await browser.renameSession('session' as never, 'renamed session')
     expect(b.binding).toHaveBeenCalledWith('session')
     expect(b.renameSession).toHaveBeenCalledWith('renamed session')
-    browser.forkSession('session' as never)
-    await vi.waitFor(() => {
-      expect(b.open).toHaveBeenCalledWith('forked')
-    })
+    await browser.forkSession('session' as never)
+    expect(b.open).toHaveBeenCalledWith('forked')
     expect(b.fork).toHaveBeenCalledWith({ sessionId: 'session', increaseTitle: true })
+    const openCallsAfterSuccessfulFork = b.open.mock.calls.length
+    const forkRejection = new SessionForkError({
+      code: 'fork-unavailable', message: 'raw Host error', details: {},
+    } as never, 'session' as never)
+    b.fork.mockRejectedValueOnce(forkRejection)
+    await expect(browser.forkSession('session' as never)).rejects.toEqual(
+      expect.objectContaining({ outcome: 'not-created' }),
+    )
+    expect(b.open).toHaveBeenCalledTimes(openCallsAfterSuccessfulFork)
+    const renameRejection = new Error('fork child rename failed after creation')
+    b.fork.mockRejectedValueOnce(renameRejection)
+    const partial = await browser.forkSession('session' as never).catch((error: unknown) => error)
+    expect(partial).toBeInstanceOf(SessionForkActionError)
+    expect(partial).toMatchObject({ outcome: 'created' })
+    expect(b.open).toHaveBeenCalledTimes(openCallsAfterSuccessfulFork)
+    b.fork.mockRejectedValueOnce(new SessionForkError({
+      code: 'workspace-attach-failed', message: 'child published but unattached',
+      details: { sessionId: 'child', workspaceId: 'workspace' },
+    } as never, 'session' as never))
+    await expect(browser.forkSession('session' as never)).rejects.toEqual(
+      expect.objectContaining({ outcome: 'created' }),
+    )
+    expect(b.open).toHaveBeenCalledTimes(openCallsAfterSuccessfulFork)
+    b.fork.mockRejectedValueOnce(new SessionForkError({
+      code: 'internal', message: 'carrier failed after dispatch', details: {},
+    } as never, 'session' as never))
+    await expect(browser.forkSession('session' as never)).rejects.toEqual(
+      expect.objectContaining({ outcome: 'unknown' }),
+    )
+    expect(b.open).toHaveBeenCalledTimes(openCallsAfterSuccessfulFork)
     await browser.renameWorkspace('ws' as never, 'renamed')
     expect(b.rename).toHaveBeenCalledWith('ws', 'renamed')
     await browser.insertSessionBefore('ws' as never, 's1' as never, 's2' as never)

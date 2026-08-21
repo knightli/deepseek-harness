@@ -186,6 +186,8 @@ async function publishAgent(
 
 function fixtureFactory(ctx: Context, liveHandles: Set<DisposeHandle>): AgentFactory {
   return {
+    sessionCapabilities: { forkFromSeed: false },
+
     async createAgent(ownerCtx, options) {
       options.signal?.throwIfAborted()
       trace.push({ kind: 'create', sessionId: options.sessionId })

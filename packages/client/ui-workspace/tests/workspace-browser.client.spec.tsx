@@ -7,6 +7,7 @@ import type {
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+import { SessionForkActionError } from '../src/client/contract/slots.ts'
 import type { WorkspaceBrowserProps } from '../src/client/contract/slots.ts'
 import { createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
 import { UNGROUPED_KEY } from '../src/client/tree.ts'
@@ -72,7 +73,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
     searchSessions: vi.fn(async () => ({ items: [], hasMore: false })),
     searchResultLimit: 20,
     renameSession: vi.fn(async () => {}),
-    forkSession: vi.fn(),
+    forkSession: vi.fn(async () => {}),
     renameWorkspace: vi.fn(async () => {}),
     deleteWorkspace: vi.fn(async () => {}),
     archiveSession: vi.fn(async () => {}),
@@ -354,6 +355,109 @@ describe('WorkspaceBrowser', () => {
       expect(screen.getByText('alpha-s')).toBeTruthy()
     } finally {
       warn.mockRestore()
+    }
+  })
+
+  it('announces a failed session fork without changing the current selection', async () => {
+    const forkSession = vi.fn(async () => {
+      throw new SessionForkActionError('not-created')
+    })
+    const open = vi.fn()
+    mount({
+      useSessions: hook(sessionState([summary('alpha-s', 1)], { current: sid('alpha-s') })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+      forkSession,
+      open,
+    })
+    fireEvent.click(screen.getByRole('button', {
+      name: t('actions.session.aria', { name: 'alpha-s' }),
+    }))
+    fireEvent.click(screen.getByRole('menuitem', { name: t('menu.fork') }))
+
+    await waitFor(() => { expect(screen.getByRole('alert')).toBeTruthy() })
+    expect(screen.getByRole('alert').textContent).toBe('无法分叉此会话。')
+    expect(screen.queryByText('session fork action failed (not-created)')).toBeNull()
+    expect(forkSession).toHaveBeenCalledWith(sid('alpha-s'))
+    expect(open).not.toHaveBeenCalled()
+
+    const firstAlert = screen.getByRole('alert')
+    fireEvent.click(screen.getByRole('button', {
+      name: t('actions.session.aria', { name: 'alpha-s' }),
+    }))
+    fireEvent.click(screen.getByRole('menuitem', { name: t('menu.fork') }))
+    await waitFor(() => {
+      expect(forkSession).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('alert')).not.toBe(firstAlert)
+    })
+    expect(screen.getByRole('alert').textContent).toBe('无法分叉此会话。')
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('uses neutral guidance when the carrier cannot prove the fork result', async () => {
+    const forkSession = vi.fn(async () => {
+      throw new SessionForkActionError('unknown')
+    })
+    mount({
+      useSessions: hook(sessionState([summary('alpha-s', 1)], { current: sid('alpha-s') })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+      forkSession,
+    })
+    fireEvent.click(screen.getByRole('button', {
+      name: t('actions.session.aria', { name: 'alpha-s' }),
+    }))
+    fireEvent.click(screen.getByRole('menuitem', { name: t('menu.fork') }))
+
+    await waitFor(() => { expect(screen.getByRole('alert')).toBeTruthy() })
+    expect(screen.getByRole('alert').textContent)
+      .toBe('分叉结果未知。请刷新会话列表后再决定是否重试。')
+    expect(screen.queryByText('session fork action failed (unknown)')).toBeNull()
+  })
+
+  it('distinguishes a created child with incomplete setup from an admission failure', async () => {
+    const forkSession = vi.fn(async () => {
+      throw new SessionForkActionError('created')
+    })
+    mount({
+      useSessions: hook(sessionState([summary('alpha-s', 1)], { current: sid('alpha-s') })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+      forkSession,
+    })
+    fireEvent.click(screen.getByRole('button', {
+      name: t('actions.session.aria', { name: 'alpha-s' }),
+    }))
+    fireEvent.click(screen.getByRole('menuitem', { name: t('menu.fork') }))
+
+    await waitFor(() => { expect(screen.getByRole('alert')).toBeTruthy() })
+    expect(screen.getByRole('alert').textContent).toBe('会话已分叉，但未能完成子会话设置。')
+    expect(screen.queryByText('session fork action failed (created)')).toBeNull()
+  })
+
+  it('does not restart a fork toast lifetime when the workspace browser rerenders', async () => {
+    vi.useFakeTimers()
+    try {
+      const forkSession = vi.fn(async () => {
+        throw new SessionForkActionError('not-created')
+      })
+      mount({
+        useSessions: hook(sessionState([summary('alpha-s', 1)], { current: sid('alpha-s') })),
+        useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+        forkSession,
+      })
+      fireEvent.click(screen.getByRole('button', {
+        name: t('actions.session.aria', { name: 'alpha-s' }),
+      }))
+      fireEvent.click(screen.getByRole('menuitem', { name: t('menu.fork') }))
+      await act(async () => { await Promise.resolve() })
+      expect(screen.getByRole('alert')).toBeTruthy()
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      fireEvent.click(screen.getByText('alpha'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_999) })
+      expect(screen.getByRole('alert')).toBeTruthy()
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally {
+      vi.useRealTimers()
     }
   })
 

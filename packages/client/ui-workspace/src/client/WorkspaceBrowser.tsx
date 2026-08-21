@@ -9,15 +9,16 @@
  * menu in between; the flow and its error dialog live in WorkspacePicker
  * (same package — direct composition, no slot between them).
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   Button, IconCloseFill14, IconPersonalizationOutline16,
-  IconProjectAddOutline16, IconSearchOutline16, Menu, Modal, Tooltip,
+  IconProjectAddOutline16, IconSearchOutline16, Menu, Modal, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   SessionId, SessionListState, SessionSearchResultItem, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-client-runtime/client'
+import { SessionForkActionError } from './contract/slots.ts'
 import type { WorkspaceBrowserProps } from './contract/slots.ts'
 import type { SessionNode, SessionOrderBy } from './tree.ts'
 import { deriveFlat, deriveGroups, deriveSearchResults, UNGROUPED_KEY } from './tree.ts'
@@ -35,6 +36,16 @@ const EXPAND_SLIDE_MS = 300
 const SEARCH_DEBOUNCE_MS = 250
 /** `session.search` wire bound, measured in JavaScript UTF-16 code units. */
 const SEARCH_QUERY_MAX_CODE_UNITS = 500
+
+/** Keep Toast's completion callback stable across unrelated browser rerenders. */
+function ForkToast({ seq, text, onDone }: {
+  seq: number
+  text: string
+  onDone: (seq: number) => void
+}) {
+  const finish = useCallback(() => { onDone(seq) }, [onDone, seq])
+  return <Toast text={text} onDone={finish} />
+}
 /** Session rows visible per Workspace before the local overflow control. */
 const COLLAPSED_SESSION_LIMIT = 5
 
@@ -514,7 +525,7 @@ function SessionTree({
                     now={now}
                     onOpen={open}
                     onRename={onSessionRename}
-                    onFork={forkSession}
+                    onFork={(sessionId) => { void forkSession(sessionId) }}
                     onArchive={onSessionArchive}
                     drag={dragProps}
                     t={t}
@@ -630,7 +641,7 @@ function FlatList({
               now={now}
               onOpen={open}
               onRename={onSessionRename}
-              onFork={forkSession}
+              onFork={(sessionId) => { void forkSession(sessionId) }}
               onArchive={onSessionArchive}
               flat
               drag={{
@@ -784,6 +795,24 @@ export function WorkspaceBrowser({
   // does not silently drop an in-progress filter.
   const [query, setQuery] = useState('')
   const [searchExpanded, setSearchExpanded] = useState(false)
+  const forkToastSeq = useRef(0)
+  const [forkToast, setForkToast] = useState<{ seq: number; text: string } | null>(null)
+  const clearForkToast = useCallback((seq: number): void => {
+    setForkToast(current => current?.seq === seq ? null : current)
+  }, [])
+  const onSessionFork = async (sessionId: SessionId): Promise<void> => {
+    await forkSession(sessionId).catch((error: unknown) => {
+      forkToastSeq.current += 1
+      const text = error instanceof SessionForkActionError
+        ? error.outcome === 'created'
+          ? t('fork.partial')
+          : error.outcome === 'unknown'
+            ? t('fork.unknown')
+            : t('fork.error')
+        : t('fork.unknown')
+      setForkToast({ seq: forkToastSeq.current, text })
+    })
+  }
   const normalizedQuery = sanitizeSearchQuery(query).trim()
   const [remoteSearch, setRemoteSearch] = useState<RemoteSearchState>({
     query: '',
@@ -974,6 +1003,14 @@ export function WorkspaceBrowser({
 
   return (
     <div className={clsx(css.root, !wide && css.rail)}>
+      {forkToast !== null && (
+        <ForkToast
+          key={forkToast.seq}
+          seq={forkToast.seq}
+          text={forkToast.text}
+          onDone={clearForkToast}
+        />
+      )}
       <div className={css.sectionHeader}>
         {wide && (
           <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
@@ -1122,7 +1159,7 @@ export function WorkspaceBrowser({
           : groupBy === 'flat'
             ? (
               <FlatList
-                useSessions={useSessions} open={open} forkSession={forkSession}
+                useSessions={useSessions} open={open} forkSession={onSessionFork}
                 onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
                 archivedSessionIds={archivedSessionIds}
                 orderBy={orderBy}
@@ -1138,7 +1175,7 @@ export function WorkspaceBrowser({
                 useSessions={useSessions}
                 onSessionRename={onSessionRename}
                 onSessionArchive={onSessionArchive}
-                forkSession={forkSession}
+                forkSession={onSessionFork}
                 workspaces={workspaces}
                 groupExpansion={groupExpansion}
                 setGroupExpanded={actions.setGroupExpanded}

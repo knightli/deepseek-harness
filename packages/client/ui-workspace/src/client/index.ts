@@ -9,9 +9,11 @@
  * packages/client/AGENTS.md.
  */
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
+import { SessionForkError } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { SessionForkActionError } from './contract/slots.ts'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
 import { createWorkspaceViewStore } from './stores.ts'
 import { WorkspaceBrowser } from './WorkspaceBrowser.tsx'
@@ -82,12 +84,20 @@ export function apply(ctx: ClientContext): void {
       const result = await session.rename(title)
       if (!result.ok) throw new Error(result.error.message)
     },
-    forkSession: (sessionId) => {
-      ctx.sessions.fork({ sessionId, increaseTitle: true })
-        .then((childId) => { ctx.sessions.open(childId) })
-        .catch(() => {
-          // Fork or child-rename failure keeps the current selection.
-        })
+    forkSession: async (sessionId) => {
+      try {
+        const childId = await ctx.sessions.fork({ sessionId, increaseTitle: true })
+        ctx.sessions.open(childId)
+      } catch (error) {
+        const outcome = !(error instanceof SessionForkError)
+          ? 'created'
+          : error.rpcError.code === 'workspace-attach-failed'
+            ? 'created'
+            : error.rpcError.code === 'fork-unavailable'
+              ? 'not-created'
+              : 'unknown'
+        throw new SessionForkActionError(outcome)
+      }
     },
     renameWorkspace: async (workspaceId, title) => { await ctx.workspaces.rename(workspaceId, title) },
     deleteWorkspace: async (workspaceId) => { await ctx.workspaces.delete(workspaceId) },
