@@ -121,6 +121,12 @@ interface SessionEventMap {
    * so tolerating concurrent writers needs a signal beyond the log.
    */
   'session/end-seed': Record<string, never>
+  /**
+   * Atomic physical record for one complete logical-history insertion. The
+   * contained members are expanded only by the canonical history fold; the
+   * control record itself never enters the logical transcript or model surface.
+   */
+  'session/history-insert': SessionHistoryInsertRecord
 }
 ```
 
@@ -372,6 +378,8 @@ interface SurfaceFoldResult {
 declare class Session {
   /** The ordered surface over this session's event log. */
   get surface(): SessionSurface;
+  /** Immutable canonical history in logical transcript order. */
+  get history(): SessionHistorySnapshot;
   /**
    * Detached, deep-frozen creation metadata (format version, cwd, lineage,
    * seed boundary). Supplied by the store via `ctx.sessions.create()`. When a
@@ -469,11 +477,19 @@ declare class Session {
    *   append reentered while this acceptance/publication boundary is open also
    *   rejects before the log changes.
    */
-  append<T extends SessionEventType>(
+  append<T extends SessionAppendEventType>(
     type: T,
     data: SessionEventMap[T],
     ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent] : []
   ): SessionEvent<T>;
+  /**
+   * Atomically append one physical history record that expands to a complete
+   * closed event group immediately before an existing logical event.
+   * @param command - receipt, logical anchor, and complete closed event group.
+   * @returns whether the insertion committed or was an exact idempotent retry.
+   * @throws when the Session is live, or the group, anchor, or receipt conflicts.
+   */
+  insertHistoryGroup(command: InsertSessionHistoryGroup): InsertSessionHistoryGroupResult;
   /**
    * The {@link EpochHeader} in force after the log's last header event — the
    * header the NEXT request will be compared against — or undefined before
@@ -748,7 +764,7 @@ fork(source: SessionForkSource, boundary?: number, childSessionId?: SessionId): 
 
 Types: [CreateSessionOptions](persistence.md) · [PrepareSessionOptions](persistence.md) · [SessionId](core.md)
 
-Source: [`packages/core/session/src/index.ts:792`](../../packages/core/session/src/index.ts)
+Source: [`packages/core/session/src/index.ts:865`](../../packages/core/session/src/index.ts)
 
 <a id="session-events"></a>
 
@@ -777,7 +793,7 @@ Creation announcement during session publication. A synchronous throw vetoes and
 
 Types: [Scoped](scope.md)
 
-Source: [`packages/core/session/src/index.ts:54`](../../packages/core/session/src/index.ts)
+Source: [`packages/core/session/src/index.ts:57`](../../packages/core/session/src/index.ts)
 
 <a id="sessiondisposed--emit"></a>
 
@@ -800,7 +816,7 @@ Emitted once when an announced session leaves the store, including publication r
 
 Types: [Scoped](scope.md)
 
-Source: [`packages/core/session/src/index.ts:64`](../../packages/core/session/src/index.ts)
+Source: [`packages/core/session/src/index.ts:67`](../../packages/core/session/src/index.ts)
 
 <a id="sessionevent--emit"></a>
 
@@ -825,7 +841,7 @@ Post-commit, fire-and-forget append feed. The listener snapshot resolves before 
 
 Types: [Scoped](scope.md)
 
-Source: [`packages/core/session/src/index.ts:76`](../../packages/core/session/src/index.ts)
+Source: [`packages/core/session/src/index.ts:79`](../../packages/core/session/src/index.ts)
 
 <a id="sessionflush--parallel"></a>
 
@@ -847,5 +863,5 @@ Awaited parallel durability checkpoint: every listener runs and the caller await
 
 Types: [Scoped](scope.md)
 
-Source: [`packages/core/session/src/index.ts:85`](../../packages/core/session/src/index.ts)
+Source: [`packages/core/session/src/index.ts:88`](../../packages/core/session/src/index.ts)
 <!-- END GENERATED cordis-surface -->

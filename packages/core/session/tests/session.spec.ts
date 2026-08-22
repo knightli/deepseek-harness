@@ -9,7 +9,7 @@ import SessionStore, {
   SessionId,
   snapshotSessionEvent,
 } from '@deepseek-ai/dsh-session'
-import type { CreateSessionOptions, SessionEventType, SessionHeader, SessionSurface, TodoItem } from '@deepseek-ai/dsh-session'
+import type { CreateSessionOptions, SessionAppendEventType, SessionHeader, SessionSurface, TodoItem } from '@deepseek-ai/dsh-session'
 
 describe('Session', () => {
   it('exposes one stable readonly surface view', () => {
@@ -498,9 +498,9 @@ describe('Session', () => {
   it('rejects a surface-eligible append with no surfaceOp marker (runtime guard for the union-widening loophole)', () => {
     const session = Session.create(SessionId('s5b'))
     session.append('turn/start', { turn: 1 })
-    // A widened SessionEventType bypasses the overload's conditional requirement,
+    // A widened SessionAppendEventType bypasses the overload's conditional requirement,
     // so the runtime guard must still reject the missing surface marker.
-    const widenedType = 'user/message' as SessionEventType
+    const widenedType = 'user/message' as SessionAppendEventType
     expect(() => session.append(widenedType, createUserMessage({
       content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' },
     })))
@@ -859,7 +859,7 @@ describe('Session', () => {
   it('rejects invalid plain surface metadata shapes at append', () => {
     const session = Session.create(SessionId('append-invalid-surface-shape'))
     const appendRaw = session.append.bind(session) as unknown as (
-      type: SessionEventType,
+      type: SessionAppendEventType,
       data: unknown,
       opts?: unknown,
     ) => SessionEvent
@@ -880,7 +880,7 @@ describe('Session', () => {
   it('rejects surface metadata on non-surface append and seed events', () => {
     const session = Session.create(SessionId('non-surface-metadata'))
     const appendRaw = session.append.bind(session) as unknown as (
-      type: SessionEventType,
+      type: SessionAppendEventType,
       data: unknown,
       opts?: unknown,
     ) => SessionEvent

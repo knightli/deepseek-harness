@@ -12,13 +12,15 @@ import { deepFreeze } from '@deepseek-ai/dsh-llm'
 import { scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type { Message } from '@deepseek-ai/dsh-llm'
-import { SESSION_FORMAT_VERSION, SessionId } from './types.ts'
+import { SESSION_FORMAT_VERSION, SessionHistoryInsertError, SessionId } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
-import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SurfaceIntent, SurfaceEventType } from './types.ts'
+import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionAppendEventType, SessionEvent, SessionEventData, SessionEventMap, SessionEventType, SessionHeader, SessionPhysicalEventType, SurfaceIntent, SurfaceEventType } from './types.ts'
 import { snapshotJsonValue } from './json.ts'
 import { deriveEventMessage, SurfaceManager } from './surface.ts'
 import type { SessionSurface } from './surface.ts'
 import { foldRequestHeader } from './request-header.ts'
+import { HistoryManager } from './history.ts'
+import type { InsertSessionHistoryGroup, InsertSessionHistoryGroupResult, SessionHistorySnapshot } from './types.ts'
 
 export * from './types.ts'
 export { SessionPreparation } from './preparation.ts'
@@ -33,6 +35,7 @@ export type { SessionSurface, SurfaceFoldReplacement, SurfaceFoldResult } from '
 export { deriveEventMessage, foldSurface, isAppendSurfaceEvent, isReplacementSurfaceEvent, isSurfaceEvent, isSurfaceEligibleType } from './surface.ts'
 export { canonicalHeader, foldRequestHeader, headerEquals } from './request-header.ts'
 export { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.ts'
+export { materializeSessionHistory } from './history.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -246,6 +249,22 @@ function assertSessionEventEnvelope(value: Record<string, unknown>, index: numbe
     case 'tool/result':
       assertCurrentLlmShape(event, index)
       break
+    case 'session/history-insert': {
+      const data = event['data']
+      const members = data !== null && typeof data === 'object' && !Array.isArray(data)
+        ? (data as Record<string, unknown>)['members']
+        : undefined
+      if (!Array.isArray(members)) break
+      for (const [memberIndex, member] of members.entries()) {
+        if (member === null || typeof member !== 'object' || Array.isArray(member)) continue
+        const memberRecord = member as Record<string, unknown>
+        assertMessageEventShape(
+          { type: memberRecord['type'], data: memberRecord['data'] },
+          `seed session/history-insert at index ${index} member ${memberIndex}`,
+        )
+      }
+      break
+    }
   }
 }
 
@@ -426,10 +445,17 @@ export class Session {
   private log: SessionEvent[] = []
   /** Single incremental owner of surface acceptance and projection state. */
   private readonly surfaceManager = new SurfaceManager(this.log)
+  /** Canonical logical history over ordinary physical events and atomic insertion records. */
+  private readonly historyManager = new HistoryManager(this.log)
 
   /** The ordered surface over this session's event log. */
   get surface(): SessionSurface {
     return this.surfaceManager
+  }
+
+  /** Immutable canonical history in logical transcript order. */
+  get history(): SessionHistorySnapshot {
+    return this.historyManager.snapshot
   }
 
   /**
@@ -535,6 +561,10 @@ export class Session {
         }
         this.log.push(mode === 'restore' ? freezeRestoredObject(snapshot) : deepFreeze(snapshot))
       }
+      // A physical capsule is not surface-eligible, so SurfaceManager alone
+      // cannot validate its logical anchor or closed nested group. Fold the
+      // complete seed before publishing this Session.
+      this.historyManager.validate()
     }
     this.firstLiveSeq = this.log.length
     this.header = restoredHeader ?? snapshotSessionHeader(id, header)
@@ -601,12 +631,53 @@ export class Session {
    *   append reentered while this acceptance/publication boundary is open also
    *   rejects before the log changes.
    */
-  append<T extends SessionEventType>(
+  append<T extends SessionAppendEventType>(
     type: T,
     data: SessionEventMap[T],
     ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent] : []
   ): SessionEvent<T> {
-    const surfaceOpts: SurfaceIntent | undefined = opts[0]
+    if ((type as SessionEventType) === 'session/history-insert') {
+      throw new Error('session/history-insert is reserved for Session.insertHistoryGroup()')
+    }
+    return this.commitEvent(type, data as SessionEventData<T>, opts[0])
+  }
+
+  /**
+   * Atomically append one physical history record that expands to a complete
+   * closed event group immediately before an existing logical event.
+   * @param command - receipt, logical anchor, and complete closed event group.
+   * @returns whether the insertion committed or was an exact idempotent retry.
+   * @throws when the Session is live, or the group, anchor, or receipt conflicts.
+   */
+  insertHistoryGroup(command: InsertSessionHistoryGroup): InsertSessionHistoryGroupResult {
+    if (attachments.has(this)) {
+      throw new SessionHistoryInsertError(
+        'LIVE_SESSION_UNSUPPORTED',
+        'session history insertion requires an unpublished detached Session',
+      )
+    }
+    const prepared = this.historyManager.prepare(command)
+    if (prepared.status === 'already-applied') {
+      return Object.freeze({
+        status: prepared.status,
+        receipt: prepared.record.receipt,
+        entryIds: prepared.entryIds,
+      })
+    }
+    this.commitEvent('session/history-insert', prepared.record)
+    return Object.freeze({
+      status: 'inserted',
+      receipt: prepared.record.receipt,
+      entryIds: prepared.entryIds,
+    })
+  }
+
+  /** Shared physical commit path for ordinary events and atomic control records. */
+  private commitEvent<T extends SessionPhysicalEventType>(
+    type: T,
+    data: SessionEventData<T>,
+    surfaceOpts?: SurfaceIntent,
+  ): SessionEvent<T> {
     const surfaceMetadata = {
       ...surfaceOpts?.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: surfaceOpts.sourceEventSeqs },
       ...surfaceOpts?.surfaceOp === undefined ? {} : { surfaceOp: surfaceOpts.surfaceOp },
@@ -642,6 +713,7 @@ export class Session {
       }
       this.log.push(event as SessionEvent)
       this.eventsSnapshot = undefined
+      this.historyManager.invalidate()
       if (callbacks !== undefined && entry !== undefined) {
         invokeContainedSessionObservers(entry.emitCtx, 'session/event', entry.id, callbackArgs, callbacks)
       }
@@ -724,6 +796,7 @@ export class Session {
    * @returns a fresh array of the shared, frozen derived history.
    */
   deriveMessages(): Message[] {
+    if (this.historyManager.hasInsertions) return this.historyManager.deriveMessages()
     const surface = this.surface
     const nodes = surface.nodes
     const generation = surface.replaceGeneration

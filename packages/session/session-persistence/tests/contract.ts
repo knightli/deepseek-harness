@@ -9,9 +9,9 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { SESSION_FORMAT_VERSION, Session, SessionId, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionHeader, SurfaceEventType, SurfaceIntent } from '@deepseek-ai/dsh-session'
-import { CallId, MessageId, createMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
+import { SESSION_FORMAT_VERSION, Session, SessionHistoryReceipt, SessionId, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '@deepseek-ai/dsh-session'
+import type { SessionAppendEventType, SessionEvent, SessionHeader, SurfaceEventType, SurfaceIntent } from '@deepseek-ai/dsh-session'
+import { CallId, MessageId, createMessage, createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionPersistence } from '../src/index.ts'
 
 /** A backend under test plus its teardown. */
@@ -64,15 +64,19 @@ export function oneTurnLog(): SessionEvent[] {
  */
 export function appendLog(session: Session, events: readonly SessionEvent[]): void {
   for (const e of events) {
-    const se = e as SessionEvent<SurfaceEventType>
+    if (e.type === 'session/history-insert') {
+      throw new Error('appendLog cannot forge a session/history-insert control record')
+    }
+    const appendable = e as SessionEvent<SessionAppendEventType>
+    const se = appendable as SessionEvent<SurfaceEventType>
     if (se.surfaceOp !== undefined) {
       const intent: SurfaceIntent = {
         surfaceOp: se.surfaceOp,
         ...se.sourceEventSeqs !== undefined ? { sourceEventSeqs: se.sourceEventSeqs } : {},
       }
-      session.append(e.type, e.data, intent)
+      session.append(appendable.type, appendable.data, intent)
     } else {
-      session.append(e.type, e.data)
+      session.append(appendable.type, appendable.data)
     }
   }
 }
@@ -94,6 +98,55 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         const loaded = await persistence.load(m.id)
         expect(loaded.meta).toMatchObject({ version: SESSION_FORMAT_VERSION, id: m.id, cwd: '/work' })
         expect(loaded.events).toEqual(log)
+      } finally {
+        await dispose()
+      }
+    })
+
+    it('round-trips one atomic logical-history insertion through the physical log', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        const m = meta('history-insertion')
+        const session = Session.create(m.id)
+        for (const [turn, text] of [[1, 'A'], [2, 'B']] as const) {
+          session.append('turn/start', { turn })
+          session.append('user/message', createUserMessage({
+            content: [{ type: 'text', text }], source: { kind: 'user' },
+          }), { surfaceOp: 'append' })
+          session.append('turn/end', { turn, reason: { kind: 'completed' } })
+        }
+        const anchor = session.history.entries.find(
+          entry => entry.type === 'turn/start' && entry.data.turn === 2,
+        )!
+        session.insertHistoryGroup({
+          receipt: SessionHistoryReceipt('persisted-growth'),
+          before: anchor.id,
+          members: [
+            { type: 'turn/start', time: 30, data: { turn: 3 } },
+            { type: 'step/start', time: 31, data: { turn: 3, step: 1 } },
+            {
+              type: 'user/message',
+              time: 32,
+              data: createUserMessage({
+                content: [{ type: 'text', text: 'A-tail' }],
+                source: { kind: 'plugin', plugin: 'history-import' },
+              }),
+            },
+            { type: 'step/end', time: 33, data: { turn: 3, step: 1 } },
+            { type: 'turn/end', time: 34, data: { turn: 3, reason: { kind: 'completed' } } },
+          ],
+        })
+
+        await persistence.create(m)
+        await persistence.append(m.id, session.events)
+        const loaded = await persistence.load(m.id)
+        const replayed = Session.create(SessionId('history-insertion-replay'), loaded.events)
+        const texts = replayed.deriveMessages().flatMap(message =>
+          message.content.flatMap(block => block.type === 'text' ? [block.text] : []),
+        )
+
+        expect(loaded.events.filter(event => event.type === 'session/history-insert')).toHaveLength(1)
+        expect(texts).toEqual(['A', 'A-tail', 'B'])
       } finally {
         await dispose()
       }

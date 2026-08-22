@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import { AgentFactoryCapabilityUnavailableError, installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentSetup, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
@@ -15,8 +16,8 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
-import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
-import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import { isAppendSurfaceEvent, isJsonValue, materializeSessionHistory } from '@deepseek-ai/dsh-session'
+import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionHistorySnapshot, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
 import { SubagentError } from '@deepseek-ai/dsh-subagent'
@@ -289,11 +290,24 @@ function isAborted(signal: AbortSignal): boolean {
  * includes the in-progress partial.
  */
 function paginate(
-  events: readonly SessionEvent[],
+  history: SessionHistorySnapshot,
   beforeSeq: number | undefined,
   maxMessages: number,
 ): { events: SessionEvent[]; hasMore: boolean } {
-  const window = beforeSeq === undefined ? [...events] : events.filter(event => event.seq < beforeSeq)
+  const groupStart = (seq: number): number => {
+    const insertion = history.entries[seq]?.insertion
+    if (insertion === undefined) return seq
+    const start = seq - insertion.memberIndex
+    const first = history.entries[start]?.insertion
+    if (first?.receipt !== insertion.receipt || first.memberIndex !== 0) {
+      throw new Error('logical history contains a non-contiguous insertion group')
+    }
+    return start
+  }
+  const end = beforeSeq === undefined
+    ? history.events.length
+    : groupStart(Math.min(beforeSeq, history.events.length))
+  const window = history.events.slice(0, end)
   let count = 0
   let cut = 0
   for (let i = window.length - 1; i >= 0; i--) {
@@ -301,9 +315,9 @@ function paginate(
     if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
     count++
     const sources = (event as { sourceEventSeqs?: number[] }).sourceEventSeqs
-    const groupStart = sources !== undefined && sources.length > 0 ? Math.min(event.seq, ...sources) : event.seq
+    const messageStart = sources !== undefined && sources.length > 0 ? Math.min(event.seq, ...sources) : event.seq
     if (count >= maxMessages) {
-      cut = groupStart
+      cut = groupStart(messageStart)
       break
     }
   }
@@ -480,7 +494,11 @@ export function assertJsonArgs(event: string, args: readonly unknown[]): JsonVal
 
 /** Queue the subscription baseline frame. */
 function subscribeSession(queue: FrameQueue<RpcRequest<MuxFrame>>, session: Session): void {
-  queue.push(frame({ type: 'session/subscribed', sessionId: session.id, lastSeq: session.seq - 1 }))
+  queue.push(frame({
+    type: 'session/subscribed',
+    sessionId: session.id,
+    lastSeq: session.history.events.at(-1)?.seq ?? -1,
+  }))
 }
 
 /**
@@ -811,7 +829,8 @@ function historyPage(
   maxMessages: number | undefined,
   scope?: ScopeKey,
 ): { events: HistoryEntry[]; hasMore: boolean } {
-  const page = paginate(events, beforeSeq, maxMessages ?? DEFAULT_MAX_MESSAGES)
+  const logicalHistory = materializeSessionHistory(events)
+  const page = paginate(logicalHistory, beforeSeq, maxMessages ?? DEFAULT_MAX_MESSAGES)
   return {
     events: page.events.map((event) => {
       const view = viewFor(ctx, event, callId => backscanArgs(page.events, callId), scope)
@@ -819,6 +838,22 @@ function historyPage(
     }),
     hasMore: page.hasMore,
   }
+}
+
+/** Translate one physical append seq to its position in canonical logical history. */
+function logicalSeqForPhysical(session: Session, physicalSeq: number): number {
+  const history = session.history
+  const logicalSeq = history.entries.findIndex(entry => entry.physicalSeq === physicalSeq)
+  // The capsule itself has no logical event. Projection state observed after
+  // that commit is nevertheless current through the logical tail.
+  return logicalSeq >= 0 ? logicalSeq : history.events.length - 1
+}
+
+/** Translate an ordinary physical append to the event delivered on the logical wire. */
+function logicalEventForPhysical(session: Session, physicalSeq: number): SessionEvent | undefined {
+  const history = session.history
+  const logicalSeq = history.entries.findIndex(entry => entry.physicalSeq === physicalSeq)
+  return logicalSeq < 0 ? undefined : history.events[logicalSeq]
 }
 
 /**
@@ -1317,7 +1352,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   // subscription unwinds with this gateway's fiber.
   ctx.inject(['sessionProjections'], (projectionCtx) => {
     projectionCtx.sessionProjections.onChanged((session, key, value, seq) => {
-      broadcast({ type: 'session/projection', sessionId: session.id, key, value, seq })
+      broadcast({
+        type: 'session/projection', sessionId: session.id, key, value,
+        seq: logicalSeqForPhysical(session, seq),
+      })
     })
   })
 
@@ -1601,11 +1639,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   ): { events: SessionEvent[]; projections?: SessionProjectionsBlock } {
     if (source.kind === 'detached') {
       const projections = includeProjections ? detachedProjectionsFor(ctx, source.events) : undefined
-      return { events: source.events, ...projections === undefined ? {} : { projections } }
+      const logical = materializeSessionHistory(source.events)
+      return {
+        events: [...source.events],
+        ...projections === undefined
+          ? {}
+          : { projections: { ...projections, asOfSeq: logical.events.at(-1)?.seq ?? -1 } },
+      }
     }
     const events = [...source.session.events]
+    const logical = source.session.history
     const projections = includeProjections ? projectionsFor(ctx, source.session) : undefined
-    return { events, ...projections === undefined ? {} : { projections } }
+    return {
+      events,
+      ...projections === undefined
+        ? {}
+        : { projections: { ...projections, asOfSeq: logical.events.at(-1)?.seq ?? -1 } },
+    }
   }
 
   /**
@@ -2452,7 +2502,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
         try {
           const accepted = titles.rename(found.agent.session, title)
-          return ok(request, { title: accepted.title, seq: accepted.eventSeq })
+          return ok(request, {
+            title: accepted.title,
+            seq: logicalSeqForPhysical(found.agent.session, accepted.eventSeq),
+          })
         } catch (error: unknown) {
           // Only the input's fault maps to title-invalid (the message is
           // product-user-visible in the rename dialog); liveness and disposal
@@ -2495,16 +2548,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         const events = source.events
+        const history = materializeSessionHistory(events)
         // An in-log anchor belongs to the turn containing it and must never
         // clip backward to an earlier completed turn. Omitted and past-end
         // anchors retain the last-completed-turn shortcut.
-        const lastSeq = events.at(-1)?.seq ?? -1
+        const lastSeq = history.events.at(-1)?.seq ?? -1
         const anchoredBoundary = atSeq === undefined
           ? undefined
-          : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
+          : history.events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
         const boundary = anchoredBoundary
           ?? (atSeq === undefined || atSeq > lastSeq
-            ? events.findLast(e => e.type === 'turn/end')
+            ? history.events.findLast(e => e.type === 'turn/end')
             : undefined)
         if (boundary === undefined) {
           return err(request, {
@@ -2515,12 +2569,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             details: { sessionId },
           })
         }
-        // Extend the cut through trailing out-of-band appends (session/title,
-        // injections) up to the next turn/start: they are standalone events, so
-        // the seed stays balanced, and the child inherits a title generated
-        // right after the boundary turn.
-        let cut = boundary.seq + 1
-        while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
+        // Extend the logical cut through trailing out-of-band appends up to the
+        // next turn/start, then prove one physical prefix materializes to that
+        // exact logical prefix. Some insertion positions have no such physical
+        // prefix and therefore cannot seed a lossless fork.
+        let logicalCut = boundary.seq + 1
+        while (logicalCut < history.events.length
+          && history.events[logicalCut]?.type !== 'turn/start') logicalCut++
+        const desiredHistory = history.events.slice(0, logicalCut)
+        const physicalCut = history.entries.slice(0, logicalCut).reduce((cut, entry) => (
+          Math.max(cut, (entry.physicalSeq ?? entry.insertion?.physicalSeq ?? -1) + 1)
+        ), 0)
+        const seed = events.slice(0, physicalCut)
+        if (!isDeepStrictEqual(materializeSessionHistory(seed).events, desiredHistory)) {
+          return err(request, {
+            code: 'fork-unavailable',
+            message: `session "${sessionId}" cannot represent the requested logical history as a physical seed`,
+            details: { sessionId },
+          })
+        }
         let workspace: Workspace | undefined
         try {
           workspace = await forkWorkspace(source)
@@ -2541,11 +2608,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           await ctx.agents.create({
             sessionId: childId,
-            seed: events.slice(0, cut),
+            seed,
             meta: {
               ...source.header.cwd === undefined ? {} : { cwd: source.header.cwd },
               parentSession: source.id,
-              seedLength: cut,
+              seedLength: physicalCut,
               ...forkComposition.agentPreset === undefined
                 ? {}
                 : { agentPreset: forkComposition.agentPreset },
@@ -3666,12 +3733,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             } else if (event.type === 'turn/end') {
               openCalls.delete(session.id)
             }
+            const logicalEvent = logicalEventForPhysical(session, event.seq)
+            if (logicalEvent === undefined) return
             const view = viewFor(
-              ctx, event,
-              callId => openCalls.get(session.id)?.get(callId) ?? backscanArgs(session.events, callId),
+              ctx, logicalEvent,
+              callId => openCalls.get(session.id)?.get(callId) ?? backscanArgs(session.history.events, callId),
               ctx.agents.get(session.id),
             )
-            queue.push(frame({ type: 'session/event', sessionId: session.id, event, ...view === undefined ? {} : { view } }))
+            queue.push(frame({ type: 'session/event', sessionId: session.id, event: logicalEvent, ...view === undefined ? {} : { view } }))
           }),
           ctx.on('session/created', (session: Session) => {
             subscribeSession(queue, session)

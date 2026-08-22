@@ -30,6 +30,32 @@ export function SessionId(id: string): SessionId {
   return id as SessionId
 }
 
+/** Idempotency key for one atomic logical-history insertion. */
+export type SessionHistoryReceipt = Branded<'SessionHistoryReceipt'>
+
+/**
+ * Brand a non-empty history insertion receipt.
+ * @param value - opaque idempotency key supplied by the insertion owner.
+ * @returns the branded receipt.
+ */
+export function SessionHistoryReceipt(value: string): SessionHistoryReceipt {
+  if (value.length === 0) throw new Error('session history receipt must not be empty')
+  return value as SessionHistoryReceipt
+}
+
+/** Stable identity of one event in the logical Session history. */
+export type SessionHistoryEntryId = Branded<'SessionHistoryEntryId'>
+
+/**
+ * Brand an opaque logical-history event identity.
+ * @param value - stable event identity supplied by the history fold.
+ * @returns the branded logical-history identity.
+ */
+export function SessionHistoryEntryId(value: string): SessionHistoryEntryId {
+  if (value.length === 0) throw new Error('session history entry id must not be empty')
+  return value as SessionHistoryEntryId
+}
+
 /**
  * The on-disk session format version, stamped into every newly-written {@link SessionHeader}
  * and enforced by every persistence backend on load. The single source of truth for the
@@ -330,10 +356,126 @@ export interface SessionEventMap {
    * so tolerating concurrent writers needs a signal beyond the log.
    */
   'session/end-seed': Record<string, never>
+  /**
+   * Atomic physical record for one complete logical-history insertion. The
+   * contained members are expanded only by the canonical history fold; the
+   * control record itself never enters the logical transcript or model surface.
+   */
+  'session/history-insert': SessionHistoryInsertRecord
 }
 
 /** The appendable event-type keys of {@link SessionEventMap}, plugin-merged extensions included. */
 export type SessionEventType = keyof SessionEventMap
+
+/** Event types accepted by ordinary {@link Session.append} callers. */
+export type SessionAppendEventType = Exclude<SessionEventType, 'session/history-insert'>
+
+/** Every physical record type accepted by replay and persistence. */
+export type SessionPhysicalEventType = SessionEventType
+
+/** Payload for one ordinary or core-control physical record. */
+export type SessionEventData<T extends SessionEventType> = SessionEventMap[T]
+
+/** Event types callers may place inside an inserted closed history group. */
+export type SessionHistoryMemberType = Exclude<
+  SessionAppendEventType,
+  'session/end-seed'
+>
+
+/**
+ * One event stored inside an atomic history insertion record. Members have no
+ * physical seq. Surface members enter their group in append order and may cite
+ * earlier members by local index.
+ */
+export type SessionHistoryMember<T extends SessionHistoryMemberType = SessionHistoryMemberType> = {
+  [K in SessionHistoryMemberType]: {
+    readonly type: K
+    readonly time: number
+    readonly data: SessionEventMap[K]
+    readonly ignorable?: true
+  } & (K extends SurfaceEventType
+    ? { readonly sourceMemberIndexes?: readonly number[] }
+    : object)
+}[T]
+
+/** Durable payload of the single physical history insertion record. */
+export interface SessionHistoryInsertRecord {
+  readonly receipt: SessionHistoryReceipt
+  readonly before: SessionHistoryEntryId
+  readonly members: readonly SessionHistoryMember[]
+}
+
+/** Public command for inserting one complete event group before an existing event. */
+export interface InsertSessionHistoryGroup {
+  readonly receipt: SessionHistoryReceipt
+  readonly before: SessionHistoryEntryId
+  readonly members: readonly SessionHistoryMember[]
+}
+
+/** Result of applying or replaying an idempotent history insertion command. */
+export interface InsertSessionHistoryGroupResult {
+  readonly status: 'inserted' | 'already-applied'
+  readonly receipt: SessionHistoryReceipt
+  readonly entryIds: readonly SessionHistoryEntryId[]
+}
+
+/** Stable fail-closed reasons for logical-history insertion rejection. */
+export type SessionHistoryInsertErrorCode =
+  | 'ANCHOR_NOT_FOUND'
+  | 'PLACEMENT_SPLITS_GROUP'
+  | 'RECEIPT_CONFLICT'
+  | 'GROUP_INVALID'
+  | 'HISTORY_CORRUPT'
+  | 'LIVE_SESSION_UNSUPPORTED'
+
+/** Typed rejection raised before a failed insertion can mutate the Session. */
+export class SessionHistoryInsertError extends Error {
+  constructor(
+    public readonly code: SessionHistoryInsertErrorCode,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'SessionHistoryInsertError'
+  }
+}
+
+/** Surface placement expressed in stable logical-history identities. */
+export type SessionHistorySurfaceOp =
+  | 'append'
+  | { readonly op: 'replace'; readonly start: SessionHistoryEntryId; readonly end: SessionHistoryEntryId }
+
+/** One immutable event in the canonical logical Session history. */
+export type SessionHistoryEntry<T extends SessionHistoryMemberType | 'session/end-seed' = SessionHistoryMemberType | 'session/end-seed'> = {
+  [K in SessionHistoryMemberType | 'session/end-seed']: {
+    readonly id: SessionHistoryEntryId
+    /** Physical log seq for ordinary events; absent for inserted members. */
+    readonly physicalSeq?: number
+    /** Atomic record origin for inserted members; absent for ordinary events. */
+    readonly insertion?: {
+      readonly receipt: SessionHistoryReceipt
+      readonly memberIndex: number
+      readonly physicalSeq: number
+    }
+    readonly type: K
+    readonly time: number
+    readonly data: SessionEventMap[K]
+    readonly ignorable?: true
+  } & (K extends SurfaceEventType
+    ? {
+      readonly sourceEventIds?: readonly SessionHistoryEntryId[]
+      readonly surfaceOp: SessionHistorySurfaceOp
+    }
+    : object)
+}[T]
+
+/** Frozen canonical logical-history snapshot. */
+export interface SessionHistorySnapshot {
+  /** Physical append-log length from which this logical snapshot was folded. */
+  readonly revision: number
+  readonly entries: readonly SessionHistoryEntry[]
+  /** Contiguous logical events in the same order as `entries`. */
+  readonly events: readonly SessionEvent[]
+}
 
 /**
  * The subset of {@link SessionEventType} values whose events produce LLM

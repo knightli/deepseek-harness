@@ -3755,6 +3755,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ServerResponse {\n    type: \'server-response\';\n    rpcId: RpcId;\n    result: RpcResult<unknown>;\n}',
   },
   {
+    name: 'SessionAppendEventType',
+    declaration: 'export type SessionAppendEventType = Exclude<SessionEventType, \'session/history-insert\'>;',
+  },
+  {
     name: 'SessionAvailability',
     declaration: 'export type SessionAvailability = \'live\' | \'persisted\';',
   },
@@ -3764,7 +3768,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionEventMap',
-    declaration: 'export interface SessionEventMap {\n    \'turn/start\': {\n        turn: number;\n    };\n    \'turn/end\': {\n        turn: number;\n        reason: TurnEndReason;\n    };\n    \'step/start\': {\n        turn: number;\n        step: number;\n    };\n    \'step/end\': {\n        turn: number;\n        step: number;\n    };\n    \'user/message\': UserMessage;\n    \'assistant/chunk\': {\n        turn: number;\n        step: number;\n        chunk: StreamChunk;\n    };\n    \'assistant/message\': {\n        turn: number;\n        step: number;\n        message: AssistantMessage;\n        usage?: TokenUsage;\n    };\n    \'tool/call\': {\n        turn: number;\n        step: number;\n        callId: CallId;\n        name: string;\n        arguments: string;\n    };\n    \'tool/result\': {\n        turn: number;\n        step: number;\n        message: ToolResultMessage;\n        error?: {\n            name: string;\n            code: string;\n        };\n        meta?: JsonValue;\n    };\n    \'todo/write\': {\n        todos: TodoItem[];\n    };\n    \'request/header\': {\n        header: EpochHeader;\n        reason: RequestHeaderReason;\n    };\n    \'request/context\': RequestContext;\n    \'session/end-seed\': Record<string, never>;\n}',
+    declaration: 'export interface SessionEventMap {\n    \'turn/start\': {\n        turn: number;\n    };\n    \'turn/end\': {\n        turn: number;\n        reason: TurnEndReason;\n    };\n    \'step/start\': {\n        turn: number;\n        step: number;\n    };\n    \'step/end\': {\n        turn: number;\n        step: number;\n    };\n    \'user/message\': UserMessage;\n    \'assistant/chunk\': {\n        turn: number;\n        step: number;\n        chunk: StreamChunk;\n    };\n    \'assistant/message\': {\n        turn: number;\n        step: number;\n        message: AssistantMessage;\n        usage?: TokenUsage;\n    };\n    \'tool/call\': {\n        turn: number;\n        step: number;\n        callId: CallId;\n        name: string;\n        arguments: string;\n    };\n    \'tool/result\': {\n        turn: number;\n        step: number;\n        message: ToolResultMessage;\n        error?: {\n            name: string;\n            code: string;\n        };\n        meta?: JsonValue;\n    };\n    \'todo/write\': {\n        todos: TodoItem[];\n    };\n    \'request/header\': {\n        header: EpochHeader;\n        reason: RequestHeaderReason;\n    };\n    \'request/context\': RequestContext;\n    \'session/end-seed\': Record<string, never>;\n    \'session/history-insert\': SessionHistoryInsertRecord;\n}',
   },
   {
     name: 'SessionEventMetadataFilter',
@@ -3829,6 +3833,26 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionHeader',
     declaration: 'export interface SessionHeader {\n    readonly version: number;\n    readonly id: SessionId;\n    readonly createdAt: number;\n    readonly cwd?: string;\n    readonly parentSession?: SessionId;\n    readonly seedLength?: number;\n    readonly origin?: \'subagent\';\n    readonly delegationDepth?: number;\n    readonly agentPreset?: string;\n}',
+  },
+  {
+    name: 'SessionHistoryEntryId',
+    declaration: 'export type SessionHistoryEntryId = Branded<\'SessionHistoryEntryId\'>;',
+  },
+  {
+    name: 'SessionHistoryInsertRecord',
+    declaration: 'export interface SessionHistoryInsertRecord {\n    readonly receipt: SessionHistoryReceipt;\n    readonly before: SessionHistoryEntryId;\n    readonly members: readonly SessionHistoryMember[];\n}',
+  },
+  {
+    name: 'SessionHistoryMember',
+    declaration: 'export type SessionHistoryMember<T extends SessionHistoryMemberType = SessionHistoryMemberType> = {\n    [K in SessionHistoryMemberType]: {\n        readonly type: K;\n        readonly time: number;\n        readonly data: SessionEventMap[K];\n        readonly ignorable?: true;\n    } & (K extends SurfaceEventType ? {\n        readonly sourceMemberIndexes?: readonly number[];\n    } : object);\n}[T];',
+  },
+  {
+    name: 'SessionHistoryMemberType',
+    declaration: 'export type SessionHistoryMemberType = Exclude<SessionAppendEventType, \'session/end-seed\'>;',
+  },
+  {
+    name: 'SessionHistoryReceipt',
+    declaration: 'export type SessionHistoryReceipt = Branded<\'SessionHistoryReceipt\'>;',
   },
   {
     name: 'SessionId',

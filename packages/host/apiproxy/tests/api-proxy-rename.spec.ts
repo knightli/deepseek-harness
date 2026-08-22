@@ -15,6 +15,7 @@ import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-ag
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
+import { SessionHistoryReceipt } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
@@ -82,6 +83,50 @@ describe('sessions.rename', () => {
     const event = source.events.findLast(item => item.type === 'session/title')
     expect(event?.seq).toBe(renamed.result.value.seq)
     expect(event?.data).toMatchObject({ title: 'new name', source: { kind: 'user' } })
+  })
+
+  it('returns the canonical logical seq after prepared history insertion', async () => {
+    const ctx = await composed()
+    const source = ctx.sessions.prepare(sid('session-rename-inserted'), { meta: { cwd: '/proj' } })
+    for (let turn = 1; turn <= 2; turn++) {
+      source.append('turn/start', { turn })
+      source.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: `prompt ${String(turn)}` }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      source.append('turn/end', { turn, reason: { kind: 'completed' } })
+    }
+    const anchor = source.history.entries.find(
+      entry => entry.type === 'turn/start' && entry.data.turn === 2,
+    )!
+    source.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('rename-inserted'),
+      before: anchor.id,
+      members: [
+        { type: 'turn/start', time: 30, data: { turn: 3 } },
+        { type: 'step/start', time: 31, data: { turn: 3, step: 1 } },
+        {
+          type: 'user/message',
+          time: 32,
+          data: createUserMessage({
+            content: [{ type: 'text', text: 'inserted' }],
+            source: { kind: 'plugin', plugin: 'history-import' },
+          }),
+        },
+        { type: 'step/end', time: 33, data: { turn: 3, step: 1 } },
+        { type: 'turn/end', time: 34, data: { turn: 3, reason: { kind: 'completed' } } },
+      ],
+    })
+    ctx.sessions.enter(source)
+    ctx.sessions.announce(source)
+    ctx.agents.register({ id: source.id, session: source, status: 'idle', ctx } as Agent)
+
+    const renamed = await api(ctx).sessions.rename(request({ sessionId: source.id, title: 'new name' }))
+    expect(renamed.result.ok).toBe(true)
+    if (!renamed.result.ok) return
+    const event = source.events.findLast(item => item.type === 'session/title')
+    expect(event?.seq).not.toBe(renamed.result.value.seq)
+    expect(renamed.result.value.seq).toBe(source.history.events.length - 1)
   })
 
   it('maps only an empty-normalizing title to title-invalid, with a presentable message', async () => {

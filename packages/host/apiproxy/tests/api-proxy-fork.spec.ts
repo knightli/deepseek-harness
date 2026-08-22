@@ -12,7 +12,7 @@ import type {
 } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import SessionStore from '@deepseek-ai/dsh-session'
+import SessionStore, { Session as DetachedSession, SessionHistoryReceipt } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
@@ -266,6 +266,62 @@ describe('sessions.fork', () => {
     ])
     expect(child?.header.parentSession).toBe(source.id)
     expect(child?.header.cwd).toBe('/proj')
+    await ctx.fiber.dispose()
+  })
+
+  it('interprets atSeq in logical history and rejects a prefix with no physical seed', async () => {
+    const ctx = await composed()
+    const sourceId = sid('session-source-inserted')
+    const prepared = DetachedSession.create(sourceId)
+    for (let turn = 1; turn <= 2; turn++) {
+      prepared.append('turn/start', { turn })
+      prepared.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: turn === 1 ? 'A' : 'B' }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      prepared.append('turn/end', { turn, reason: { kind: 'completed' } })
+    }
+    const anchor = prepared.history.entries.find(
+      entry => entry.type === 'turn/start' && entry.data.turn === 2,
+    )!
+    prepared.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('fork-inserted'),
+      before: anchor.id,
+      members: [
+        { type: 'turn/start', time: 30, data: { turn: 3 } },
+        { type: 'step/start', time: 31, data: { turn: 3, step: 1 } },
+        {
+          type: 'user/message',
+          time: 32,
+          data: createUserMessage({
+            content: [{ type: 'text', text: 'inserted' }],
+            source: { kind: 'plugin', plugin: 'history-import' },
+          }),
+        },
+        { type: 'step/end', time: 33, data: { turn: 3, step: 1 } },
+        { type: 'turn/end', time: 34, data: { turn: 3, reason: { kind: 'completed' } } },
+      ],
+    })
+    const { agent } = await ctx.agents.create({
+      sessionId: sourceId,
+      seed: [...prepared.events],
+      meta: { cwd: '/proj' },
+    })
+    const { session: source } = agent
+    const insertedSeq = source.history.events.find(event => event.type === 'user/message'
+      && event.data.content.some(block => block.type === 'text' && block.text === 'inserted'))!.seq
+
+    const proxy = api(ctx)
+    const unavailable = await proxy.sessions.fork(request({ sessionId: source.id, atSeq: insertedSeq }))
+    expect(unavailable.result).toMatchObject({ ok: false, error: { code: 'fork-unavailable' } })
+
+    const complete = await proxy.sessions.fork(request({ sessionId: source.id }))
+    expect(complete.result.ok, JSON.stringify(complete.result)).toBe(true)
+    if (complete.result.ok) {
+      expect(ctx.sessions.get(complete.result.value.sessionId)?.deriveMessages().flatMap(message =>
+        message.content.flatMap(block => block.type === 'text' ? [block.text] : []),
+      )).toEqual(['A', 'inserted', 'B'])
+    }
     await ctx.fiber.dispose()
   })
 

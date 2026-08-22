@@ -11,13 +11,13 @@ import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { createUserMessage, CallId , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionEventMap, SessionEventType, SurfaceIntent } from '@deepseek-ai/dsh-session'
+import type { SessionAppendEventType, SessionEventMap, SurfaceIntent } from '@deepseek-ai/dsh-session'
 
 // Each arbitrary supplies its own surface intent; `build` must not synthesize
 // one or the property would fail to exercise malformed fixture choices.
 type Appendable = {
-  [T in SessionEventType]: { type: T; data: SessionEventMap[T]; intent?: SurfaceIntent }
-}[SessionEventType]
+  [T in SessionAppendEventType]: { type: T; data: SessionEventMap[T]; intent?: SurfaceIntent }
+}[SessionAppendEventType]
 
 const textContentArb = fc.array(
   fc.record({ type: fc.constant<'text'>('text'), text: fc.string() }),

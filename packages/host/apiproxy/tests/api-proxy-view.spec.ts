@@ -12,6 +12,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import SessionStore from '@deepseek-ai/dsh-session'
+import { SessionHistoryReceipt } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { CallId, createMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -234,6 +235,93 @@ describe('mux live view computation', () => {
     expect('view' in (byKey.get('tool/result:h-orphan') ?? {})).toBe(false)
     expect('view' in (byKey.get('tool/result:h-bad') ?? {})).toBe(false)
     expect('view' in (byKey.get('tool/result:h-plain') ?? {})).toBe(false)
+  })
+
+  it('serves inserted logical history in order and continues live logical seqs', async () => {
+    const { ctx } = await harness()
+    const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    const session = ctx.sessions.prepare()
+    session.append('turn/start', { turn: 1 })
+    appendUserText(session, 'A')
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    session.append('turn/start', { turn: 2 })
+    appendUserText(session, 'B')
+    session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    const anchor = session.history.entries.find(
+      entry => entry.type === 'turn/start' && entry.data.turn === 2,
+    )!
+    session.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('host-history-growth'),
+      before: anchor.id,
+      members: [
+        { type: 'turn/start', time: 30, data: { turn: 3 } },
+        { type: 'step/start', time: 31, data: { turn: 3, step: 1 } },
+        {
+          type: 'user/message',
+          time: 32,
+          data: createUserMessage({
+            content: [{ type: 'text', text: 'A-tail' }],
+            source: { kind: 'plugin', plugin: 'history-import' },
+          }),
+        },
+        { type: 'step/end', time: 33, data: { turn: 3, step: 1 } },
+        { type: 'turn/end', time: 34, data: { turn: 3, reason: { kind: 'completed' } } },
+        { type: 'turn/start', time: 35, data: { turn: 4 } },
+        { type: 'step/start', time: 36, data: { turn: 4, step: 1 } },
+        {
+          type: 'user/message',
+          time: 37,
+          data: createUserMessage({
+            content: [{ type: 'text', text: 'A-tail-2' }],
+            source: { kind: 'plugin', plugin: 'history-import' },
+          }),
+        },
+        { type: 'step/end', time: 38, data: { turn: 4, step: 1 } },
+        { type: 'turn/end', time: 39, data: { turn: 4, reason: { kind: 'completed' } } },
+      ],
+    })
+    ctx.sessions.enter(session)
+    ctx.sessions.announce(session)
+    ctx.agents.register({
+      id: session.id, session, status: 'idle', ctx,
+      inbox: { hasPending: false },
+    } as unknown as Agent)
+
+    const response = await api.sessions.history({
+      rpcId: RpcId('t-hist-inserted'),
+      payload: { sessionId: session.id, maxMessages: 100 },
+    })
+    if (!response.result.ok) throw new Error('unreachable')
+    const history = response.result.value.events.map(entry => entry.event)
+    const texts = history.flatMap(event => event.type === 'user/message'
+      ? event.data.content.flatMap(block => block.type === 'text' ? [block.text] : [])
+      : [])
+    expect(texts).toEqual(['A', 'A-tail', 'A-tail-2', 'B'])
+    expect(history.map(event => event.seq)).toEqual(history.map((_event, index) => index))
+
+    const bStart = history.find(event => event.type === 'turn/start' && event.data.turn === 4)!
+    const insertedPage = await api.sessions.history({
+      rpcId: RpcId('t-hist-inserted-page'),
+      payload: { sessionId: session.id, beforeSeq: bStart.seq, maxMessages: 1 },
+    })
+    if (!insertedPage.result.ok) throw new Error('unreachable')
+    expect(insertedPage.result.value.events.flatMap(({ event }) => event.type === 'user/message'
+      ? event.data.content.flatMap(block => block.type === 'text' ? [block.text] : [])
+      : [])).toEqual(['A-tail', 'A-tail-2'])
+    expect(insertedPage.result.value.hasMore).toBe(true)
+
+    const abort = new AbortController()
+    const stream = api.events.mux({ rpcId: RpcId('t-mux-inserted'), payload: {} }, abort.signal)
+    const collected = collect(stream, 3, abort)
+    session.append('turn/start', { turn: 4 })
+    appendUserText(session, 'C')
+    session.append('turn/end', { turn: 4, reason: { kind: 'completed' } })
+    const frames = (await collected).filter(frame => frame.type === 'session/event')
+    expect(frames.map(frame => frame.event.seq)).toEqual([
+      history.length,
+      history.length + 1,
+      history.length + 2,
+    ])
   })
 
   it('counts only append-origin messages toward maxMessages and keeps each compaction summary with its replacement', async () => {
