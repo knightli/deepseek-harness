@@ -36,6 +36,19 @@ export function SessionTitleProviderId(id: string): SessionTitleProviderId {
   return id as SessionTitleProviderId
 }
 
+/** Identifies an external system that remains authoritative for a projected title. */
+export type SessionTitleAuthorityId = Branded<'SessionTitleAuthorityId'>
+
+/**
+ * Brand a stable non-empty external title authority identifier.
+ * @param id - stable non-empty authority identifier.
+ * @returns branded external title authority identifier.
+ */
+export function SessionTitleAuthorityId(id: string): SessionTitleAuthorityId {
+  if (id.length === 0) throw new Error('session-title authority id must be non-empty')
+  return id as SessionTitleAuthorityId
+}
+
 /** Exact auxiliary model route that produced a title. */
 export interface SessionTitleModelProvenance {
   /** Registered LLM provider route. */
@@ -56,15 +69,26 @@ export type SessionTitleSource =
     /** Explicit user rename: pins the title — automatic generation stops scheduling. */
     readonly kind: 'user'
   }
+  | {
+    /** A title projected from an external system that remains its mutation authority. */
+    readonly kind: 'external'
+    readonly authority: SessionTitleAuthorityId
+  }
 
 /** Payload of the log-only `session/title` event. */
 export interface SessionTitleEventData {
   /** Normalized non-empty title text. */
   readonly title: string
-  /** Exact human `user/message` seqs used to derive this title; empty for an explicit user rename. */
+  /** Exact human `user/message` seqs used to derive this title; empty for explicit user or external titles. */
   readonly messageSeqs: number[]
-  /** Whether the built-in fallback, a registered provider, or the user supplied the title. */
+  /** Whether fallback, a provider, the user, or an external authority supplied the title. */
   readonly source: SessionTitleSource
+}
+
+/** Payload marking that an external authority no longer supplies a title. */
+export interface SessionTitleClearedEventData {
+  /** The external system reporting no current title and owning the cleared projection. */
+  readonly authority: SessionTitleAuthorityId
 }
 
 /** Latest folded title plus the title event's durable envelope facts. */
@@ -98,6 +122,8 @@ declare module '@deepseek-ai/dsh-session/types' {
      * surface or derived history.
      */
     'session/title': SessionTitleEventData
+    /** Latest external title was removed; projection falls back to no title. */
+    'session/title-cleared': SessionTitleClearedEventData
   }
 }
 
@@ -189,8 +215,8 @@ export function collectSessionTitleMessages(
  * @returns the latest immutable title snapshot, or `undefined`.
  */
 export function foldSessionTitle(events: readonly SessionEvent[]): SessionTitleSnapshot | undefined {
-  const event = events.findLast(item => item.type === 'session/title')
-  if (event === undefined) return undefined
+  const event = events.findLast(item => item.type === 'session/title' || item.type === 'session/title-cleared')
+  if (event === undefined || event.type === 'session/title-cleared') return undefined
   return deepFreeze({
     title: event.data.title,
     messageSeqs: [...event.data.messageSeqs],
@@ -198,6 +224,15 @@ export function foldSessionTitle(events: readonly SessionEvent[]): SessionTitleS
     eventSeq: event.seq,
     updatedAt: event.time,
   })
+}
+
+/** Keep external ownership durable even when its current visible title is empty. */
+function externalTitleAuthority(
+  events: readonly SessionEvent[],
+): SessionTitleAuthorityId | undefined {
+  const event = events.findLast(item => item.type === 'session/title' || item.type === 'session/title-cleared')
+  if (event?.type === 'session/title-cleared') return event.data.authority
+  return event?.data.source.kind === 'external' ? event.data.source.authority : undefined
 }
 
 /** Defensive copy of a logged title source (the snapshot must not alias log-owned objects). */
@@ -210,6 +245,7 @@ function copySessionTitleSource(source: SessionTitleSource): SessionTitleSource 
       ...(source.model === undefined ? {} : { model: { ...source.model } }),
     }
     case 'user': return { kind: 'user' }
+    case 'external': return { kind: 'external', authority: source.authority }
     /* v8 ignore next -- closed-union exhaustiveness guard */
     default: return assertNever(source, 'SessionTitleSource')
   }
@@ -310,9 +346,13 @@ export class SessionTitleService extends Service {
         key: 'title',
         schema: zod.union([zod.string().min(1), zod.null()]),
         init: () => null,
-        apply: (state, event) => (event.type === 'session/title' ? event.data.title : state),
+        apply: (state, event) => {
+          if (event.type === 'session/title') return event.data.title
+          if (event.type === 'session/title-cleared') return null
+          return state
+        },
         view: state => state,
-        stateVersion: 1,
+        stateVersion: 2,
       })
     })
 
@@ -350,6 +390,89 @@ export class SessionTitleService extends Service {
   }
 
   /**
+   * Normalize and validate one explicit title without mutating a Session.
+   * @param title - raw explicit title.
+   * @returns normalized non-empty title.
+   */
+  normalize(title: string): string {
+    const normalized = normalizeSessionTitle(title, this.config.maxTitleBytes)
+    if (normalized.length === 0) {
+      throw new SessionTitleInvalidError('session title must contain visible characters')
+    }
+    return normalized
+  }
+
+  /**
+   * Project the current title owned by an external authority. Detached replay
+   * Sessions are accepted so a caller can persist the appended event before
+   * exposing or resuming the Session. An exact current projection is a no-op.
+   * @param session - live or replayed Session receiving the projection.
+   * @param title - raw non-empty title reported by the authority.
+   * @param authority - stable owner of the projected title.
+   * @returns latest externally-owned title snapshot.
+   */
+  projectExternal(
+    session: Session,
+    title: string,
+    authority: SessionTitleAuthorityId,
+  ): SessionTitleSnapshot {
+    this.assertServiceActive()
+    const normalized = this.normalize(title)
+    const current = this.get(session)
+    const externalAuthority = externalTitleAuthority(session.events)
+    if (externalAuthority !== undefined && externalAuthority !== authority) {
+      throw new Error('session title is owned by a different external authority')
+    }
+    if (current?.title === normalized
+      && current.source.kind === 'external'
+      && current.source.authority === authority) return current
+    if (this.ctx.sessions.get(session.id) === session) {
+      const state = this.stateFor(session)
+      this.supersede(state, 'external title projection superseded automatic title generation')
+    }
+    session.append('session/title', {
+      title: normalized,
+      messageSeqs: [],
+      source: { kind: 'external', authority },
+    })
+    const snapshot = this.get(session)
+    /* v8 ignore next -- the append above just committed a session/title event. */
+    if (snapshot === undefined) throw new Error('external title projection failed to fold')
+    return snapshot
+  }
+
+  /**
+   * Clear the current title when an external authority reports no title.
+   * This deliberately supersedes legacy local sources; a title owned by a
+   * different external authority remains fenced.
+   * @param session - live or replayed Session receiving the clearing event.
+   * @param authority - stable owner of the title being removed.
+   */
+  clearExternal(session: Session, authority: SessionTitleAuthorityId): void {
+    this.assertServiceActive()
+    const latest = session.events.findLast(
+      event => event.type === 'session/title' || event.type === 'session/title-cleared',
+    )
+    if (latest?.type === 'session/title-cleared') {
+      if (latest.data.authority === authority) return
+      throw new Error('session title is cleared by a different external authority')
+    }
+    if (latest === undefined) {
+      session.append('session/title-cleared', { authority })
+      return
+    }
+    if (latest.data.source.kind === 'external'
+      && latest.data.source.authority !== authority) {
+      throw new Error('session title is owned by a different external authority')
+    }
+    if (this.ctx.sessions.get(session.id) === session) {
+      const state = this.stateFor(session)
+      this.supersede(state, 'external title clearing superseded automatic title generation')
+    }
+    session.append('session/title-cleared', { authority })
+  }
+
+  /**
    * Accept an explicit user title. Appends a `session/title` event with the
    * `user` source, which pins the title: in-flight automatic generation is
    * superseded and later user messages schedule none (an explicit
@@ -365,10 +488,10 @@ export class SessionTitleService extends Service {
     if (this.ctx.sessions.get(session.id) !== session) {
       throw new Error(`session "${session.id}" is not live in this store`)
     }
-    const normalized = normalizeSessionTitle(title, this.config.maxTitleBytes)
-    if (normalized.length === 0) {
-      throw new SessionTitleInvalidError('session title must contain visible characters')
+    if (externalTitleAuthority(session.events) !== undefined) {
+      throw new Error('session title is owned by an external authority')
     }
+    const normalized = this.normalize(title)
     const state = this.stateFor(session)
     this.supersede(state, 'user rename superseded automatic title generation')
     session.append('session/title', {
@@ -394,6 +517,9 @@ export class SessionTitleService extends Service {
     this.assertServiceActive()
     if (this.ctx.sessions.get(session.id) !== session) {
       throw new Error(`session "${session.id}" is not live in this store`)
+    }
+    if (externalTitleAuthority(session.events) !== undefined) {
+      throw new Error('session title is owned by an external authority')
     }
     const registration = this.registration
     const messages = collectSessionTitleMessages(session.events)
@@ -463,7 +589,8 @@ export class SessionTitleService extends Service {
     if (!this.serviceActive()) return
     if (event.data.source.kind !== 'user' || collectSessionTitleMessages([event]).length === 0) return
     // A user rename pins the title: no automatic revision may override it.
-    if (this.get(session)?.source.kind === 'user') return
+    const currentSource = this.get(session)?.source.kind
+    if (currentSource === 'user' || externalTitleAuthority(session.events) !== undefined) return
     const registration = this.registration
     if (registration !== undefined && !registration.closing) {
       const messages = collectSessionTitleMessages(session.events, event.seq)

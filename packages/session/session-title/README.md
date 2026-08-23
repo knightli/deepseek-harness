@@ -9,6 +9,8 @@ Only text blocks from human `user/message` events are eligible. The first eligib
 ## Service: `SessionTitleService` (ctx key: `sessionTitle`)
 
 - `get(session)` folds the latest accepted title from a live or replayed log.
+- `normalize(title)` validates one explicit title without mutating a Session.
+- `projectExternal(session, title, authority)` appends an externally-owned title to a live or replayed Session; an exact repeat is a no-op. `clearExternal(session, authority)` lets one authority clear its own projection or supersede a legacy local title, returning the generic `title` projection to `null` while preserving the external mutation fence.
 - `refresh(session, signal?)` materializes the fallback when needed, then explicitly runs the registered provider over the current eligible messages. Provider errors and caller cancellation reject; cancellation does not roll back an already accepted fallback event.
 - `rename(session, title)` accepts an explicit user title synchronously: it normalizes the text, supersedes in-flight automatic work, and appends a `session/title` event with the `user` source. A user-sourced latest title pins the session — later user messages schedule no automatic revision; an explicit `refresh` remains the deliberate unpin.
 - `register(provider)` installs the sole optional provider and returns its awaitable Cordis effect disposer. A second registration throws immediately; disposal aborts pending and active calls, waits for their settlement, and only then permits another provider to register.
@@ -51,5 +53,5 @@ None for the main request; title events do not change its reconstructed content 
 
 ## Known Limitations and Deferred Work
 
-- Title deletion (unpinning back to automatic titles without an explicit `refresh`), search, and list indexing are outside this service.
+- User-title deletion (unpinning back to automatic titles without an explicit `refresh`), search, and list indexing are outside this service. An external authority cannot clear another external authority's projection; it can clear its own projection or supersede a legacy local title.
 - The provider registry deliberately accepts at most one implementation, so a deployment cannot compose competing title strategies without writing one provider that owns their precedence.

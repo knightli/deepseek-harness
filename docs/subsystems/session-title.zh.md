@@ -16,6 +16,19 @@ type SessionTitleProviderId = Branded<'SessionTitleProviderId'>
 ```
 
 ```ts type-equiv
+/** Identifies an external system that remains authoritative for a projected title. */
+type SessionTitleAuthorityId = Branded<'SessionTitleAuthorityId'>
+```
+
+```ts type-equiv
+/** Accepted external rename projected only after the authority mutation succeeds. */
+interface SessionAuthorityRename {
+  readonly title: string
+  readonly authority: SessionTitleAuthorityId
+}
+```
+
+```ts type-equiv
 /** Exact auxiliary model route that produced a title. */
 interface SessionTitleModelProvenance {
   /** Registered LLM provider route. */
@@ -38,6 +51,11 @@ type SessionTitleSource =
     /** Explicit user rename: pins the title — automatic generation stops scheduling. */
     readonly kind: 'user'
   }
+  | {
+    /** A title projected from an external system that remains its mutation authority. */
+    readonly kind: 'external'
+    readonly authority: SessionTitleAuthorityId
+  }
 ```
 
 ```ts type-equiv
@@ -45,9 +63,9 @@ type SessionTitleSource =
 interface SessionTitleEventData {
   /** Normalized non-empty title text. */
   readonly title: string
-  /** Exact human `user/message` seqs used to derive this title; empty for an explicit user rename. */
+  /** Exact human `user/message` seqs used to derive this title; empty for explicit user or external titles. */
   readonly messageSeqs: number[]
-  /** Whether the built-in fallback, a registered provider, or the user supplied the title. */
+  /** Whether fallback, a provider, the user, or an external authority supplied the title. */
   readonly source: SessionTitleSource
 }
 ```
@@ -153,6 +171,33 @@ interface SessionTitleProvider {
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — this section is byte-identical in both language sides of the page. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxsessionauthority--sessionauthority"></a>
+
+### `ctx.sessionAuthority` — `SessionAuthority`
+
+Optional per-Session authority bridge; unowned identities are no-ops.
+
+```ts cordis-catalog
+/**
+ * Reconcile an externally-owned Session before a cold or idle access.
+ * @param sessionId - exact DSH Session identity whose binding is authoritative.
+ * @returns when the same Session has been refreshed or is not externally owned.
+ */
+refresh(sessionId: SessionId): Promise<void>
+
+/**
+ * Mutate the external authority before projecting an accepted rename locally.
+ * @param sessionId - exact DSH Session identity whose binding is authoritative.
+ * @param title - already normalized non-empty title requested by the caller.
+ * @returns accepted external projection, or `undefined` for an unowned Session.
+ */
+rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | undefined>
+```
+
+Types: [SessionId](core.md)
+
+Source: [`packages/host/apiproxy/src/index.ts:51`](../../packages/host/apiproxy/src/index.ts)
+
 <a id="ctxsessiontitle--sessiontitleservice"></a>
 
 ### `ctx.sessionTitle` — `SessionTitleService`
@@ -166,6 +211,33 @@ Log-backed title fold plus asynchronous fallback generation.
  * @returns latest title snapshot, or `undefined` before eligible input.
  */
 get(session: Session): SessionTitleSnapshot | undefined
+
+/**
+ * Normalize and validate one explicit title without mutating a Session.
+ * @param title - raw explicit title.
+ * @returns normalized non-empty title.
+ */
+normalize(title: string): string
+
+/**
+ * Project the current title owned by an external authority. Detached replay
+ * Sessions are accepted so a caller can persist the appended event before
+ * exposing or resuming the Session. An exact current projection is a no-op.
+ * @param session - live or replayed Session receiving the projection.
+ * @param title - raw non-empty title reported by the authority.
+ * @param authority - stable owner of the projected title.
+ * @returns latest externally-owned title snapshot.
+ */
+projectExternal( session: Session, title: string, authority: SessionTitleAuthorityId, ): SessionTitleSnapshot
+
+/**
+ * Clear the current title when an external authority reports no title.
+ * This deliberately supersedes legacy local sources; a title owned by a
+ * different external authority remains fenced.
+ * @param session - live or replayed Session receiving the clearing event.
+ * @param authority - stable owner of the title being removed.
+ */
+clearExternal(session: Session, authority: SessionTitleAuthorityId): void
 
 /**
  * Accept an explicit user title. Appends a `session/title` event with the
@@ -200,5 +272,5 @@ register(provider: SessionTitleProvider): () => Promise<void>
 
 Types: [Session](session.md)
 
-Source: [`packages/session/session-title/src/index.ts:261`](../../packages/session/session-title/src/index.ts)
+Source: [`packages/session/session-title/src/index.ts:297`](../../packages/session/session-title/src/index.ts)
 <!-- END GENERATED cordis-surface -->

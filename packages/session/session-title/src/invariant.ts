@@ -31,8 +31,9 @@ const install: InvariantInstaller = Object.assign((ctx: Context, fail: Invariant
     const [, event] = args as [unknown, SessionEvent]
     if (event.type !== 'session/title') return
     const { source, messageSeqs } = event.data
-    if ((messageSeqs.length === 0) !== (source.kind === 'user')) {
-      const requirement = source.kind === 'user' ? 'cite no message seqs' : 'cite at least one message seq'
+    const citationFree = source.kind === 'user' || source.kind === 'external'
+    if ((messageSeqs.length === 0) !== citationFree) {
+      const requirement = citationFree ? 'cite no message seqs' : 'cite at least one message seq'
       fail(`session/title event ${String(event.seq)} with source "${source.kind}" must ${requirement}; got ${String(messageSeqs.length)}`)
     }
   }, { global: true })

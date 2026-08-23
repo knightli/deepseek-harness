@@ -265,6 +265,102 @@ describe('attached updatedAt tracks human prompts', () => {
 })
 
 describe('cold history recovery view', () => {
+  it('refreshes an externally-owned cold Session before serving its tail page', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const sessionId = sid('session-authority-refresh')
+    const meta = header(sessionId, 1000)
+    let events = [
+      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+      { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] as SessionEvent[]
+    ctx.provide('sessionPersistence', {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events: structuredClone(events) }),
+      locate: () => undefined,
+    } as never)
+    const refresh = vi.fn(async () => {
+      events = [
+        ...events,
+        { type: 'turn/start', seq: 2, time: 3, data: { turn: 2 } },
+        { type: 'turn/end', seq: 3, time: 4, data: { turn: 2, reason: { kind: 'completed' } } },
+      ]
+    })
+    ctx.provide('sessionAuthority', { refresh })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const history = await api.sessions.history(request({ sessionId }))
+
+    if (!history.result.ok) throw new Error(JSON.stringify(history.result.error))
+    expect(history.result.ok).toBe(true)
+    if (history.result.ok) {
+      expect(history.result.value.events.map(entry => entry.event.type))
+        .toEqual(['turn/start', 'turn/end', 'turn/start', 'turn/end'])
+    }
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(ctx.sessions.get(sessionId)).toBeUndefined()
+  })
+
+  it('maps a rejected authority refresh onto the public prompt result', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const refresh = vi.fn(() => Promise.reject(new Error('private authority failure')))
+    ctx.provide('sessionAuthority', { refresh })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const prompted = await api.sessions.prompt(request({
+      sessionId: sid('session-authority-rejected'),
+      mode: 'queue',
+      content: [{ type: 'text', text: 'synthetic prompt' }],
+    }))
+
+    expect(prompted.result).toEqual({
+      ok: false,
+      error: {
+        code: 'internal',
+        message: 'external Session authority refresh failed',
+        details: {},
+      },
+    })
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it('does not expose authority refresh details through the public history result', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const privateDetail = 'private path and protocol detail'
+    ctx.provide('sessionAuthority', {
+      refresh: () => Promise.reject(new Error(privateDetail)),
+    })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const history = await api.sessions.history(request({
+      sessionId: sid('session-authority-history-rejected'),
+    }))
+
+    expect(history.result).toEqual({
+      ok: false,
+      error: {
+        code: 'internal',
+        message: 'history unavailable for session "session-authority-history-rejected": Error: external Session authority refresh failed',
+        details: {},
+      },
+    })
+    expect(JSON.stringify(history.result)).not.toContain(privateDetail)
+  })
+
   it('shows in-memory interruption repair without activating the session', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

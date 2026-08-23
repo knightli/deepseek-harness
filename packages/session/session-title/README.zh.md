@@ -9,6 +9,8 @@
 ## 服务：`SessionTitleService`（ctx 键：`sessionTitle`）
 
 - `get(session)` 从活跃或回放日志折叠最新已接受标题。
+- `normalize(title)` 校验显式标题，但不修改 Session。
+- `projectExternal(session, title, authority)` 向活跃或回放 Session 追加由外部权威拥有的标题；完全相同的重复投影为空操作。`clearExternal(session, authority)` 允许一个权威清除自己的投影或取代旧的本地标题，使通用 `title` 投影回到 `null`，同时保留外部变更围栏。
 - `refresh(session, signal?)` 在需要时物化回退，然后显式运行已注册提供方，处理当前符合条件的消息。提供方错误或调用方取消都会导致返回的 Promise 被拒绝；取消不会回滚已接受的回退事件。
 - `rename(session, title)` 同步接受用户显式标题：规范化文本、取代在途自动工作，并追加一条 `user` 来源的 `session/title` 事件。用户来源的最新标题会钉住该会话——后续用户消息不再安排自动修订；显式 `refresh` 仍是有意的解钉手段。
 - `register(provider)` 安装唯一可选提供方，并返回可等待的 Cordis effect disposer。第二次注册会立即抛出；对提供方执行 dispose（资源释放）会中止待处理和活跃调用，等待其结算，之后才允许注册另一个提供方。
@@ -51,5 +53,5 @@ fork 出的会话会原样继承种子中的标题事件。首消息节奏不会
 
 ## 已知限制与暂缓事项
 
-- 删除标题（不经显式 `refresh` 就解钉回自动标题）、搜索和列表索引不属于此服务。
+- 删除用户标题（不经显式 `refresh` 就解钉回自动标题）、搜索和列表索引不属于此服务。外部权威不能清除另一个外部权威的投影；它可以清除自己的投影，或取代旧的本地标题。
 - 提供方注册表有意最多接受一个实现，因此部署若要组合相互竞争的标题策略，必须编写一个自行负责优先级的提供方。

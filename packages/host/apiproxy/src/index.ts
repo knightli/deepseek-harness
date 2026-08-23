@@ -15,6 +15,8 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionTitleAuthorityId } from '@deepseek-ai/dsh-session-title'
 import type { ApiProxy } from './api/index.ts'
 import { createApiProxy, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES } from './api-proxy.ts'
 import {
@@ -34,7 +36,32 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** The host-side ApiProxy implementation (the transport-agnostic gateway face). */
     apiProxy: ApiProxy
+    /** Optional external authority consulted before cold reads/resumes and bound renames. */
+    sessionAuthority: SessionAuthority
   }
+}
+
+/** Accepted external rename projected only after the authority mutation succeeds. */
+export interface SessionAuthorityRename {
+  readonly title: string
+  readonly authority: SessionTitleAuthorityId
+}
+
+/** Optional per-Session authority bridge; unowned identities are no-ops. */
+export interface SessionAuthority {
+  /**
+   * Reconcile an externally-owned Session before a cold or idle access.
+   * @param sessionId - exact DSH Session identity whose binding is authoritative.
+   * @returns when the same Session has been refreshed or is not externally owned.
+   */
+  refresh(sessionId: SessionId): Promise<void>
+  /**
+   * Mutate the external authority before projecting an accepted rename locally.
+   * @param sessionId - exact DSH Session identity whose binding is authoritative.
+   * @param title - already normalized non-empty title requested by the caller.
+   * @returns accepted external projection, or `undefined` for an unowned Session.
+   */
+  rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | undefined>
 }
 
 /** Gateway plugin configuration. */

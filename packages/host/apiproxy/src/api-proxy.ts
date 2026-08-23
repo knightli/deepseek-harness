@@ -1334,11 +1334,43 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   // composition, and the header is written once at creation. Reading the
   // header here would silently undo the switch on the next restart and
   // restore that history under the old tool set.
-  const agentFor = createApiRemoteAgentResolver(ctx, {
+  const resolveAgent = createApiRemoteAgentResolver(ctx, {
     agentOptions,
     setup: async ({ meta, events }) =>
       (await composeAgent(resolveSessionPreset({ header: meta, events }))).setup,
   })
+
+  /** Refresh one externally-owned detached or idle Session before reading or resuming it. */
+  async function refreshSessionAuthority(sessionId: SessionId): Promise<void> {
+    const agent = ctx.get('agents')?.get(sessionId)
+    if (agent?.status === 'running') return
+    if (agent === undefined && ctx.sessions.get(sessionId) !== undefined) return
+    try {
+      await ctx.get('sessionAuthority')?.refresh(sessionId)
+    } catch {
+      throw new Error('external Session authority refresh failed')
+    }
+  }
+
+  const agentFor = async (sessionId: SessionId) => {
+    try {
+      // An attached Agent is already the active runtime authority. Reopening
+      // refreshes through the tail-history path; only a genuinely cold resume
+      // must refresh here before reconstructing an Agent.
+      if (ctx.get('agents')?.get(sessionId) === undefined) {
+        await refreshSessionAuthority(sessionId)
+      }
+    } catch {
+      return {
+        error: {
+          code: 'internal' as const,
+          message: 'external Session authority refresh failed',
+          details: {},
+        },
+      }
+    }
+    return resolveAgent(sessionId)
+  }
 
   /** Send one transient frame to every connected mux consumer. */
   function broadcast(payload: MuxFrame): void {
@@ -2391,6 +2423,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       async history(request) {
         const { sessionId, beforeSeq, maxMessages } = request.payload
         try {
+          if (beforeSeq === undefined) await refreshSessionAuthority(sessionId)
           const source = await historySourceFor(sessionId)
           // Both awaits happen BEFORE the cut. Ensuring the recorded
           // composition's standing mount is what registers its projection
@@ -2501,7 +2534,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           return err(request, { code: 'internal', message: 'renaming is unavailable: this deployment mounts no session-title service', details: {} })
         }
         try {
-          const accepted = titles.rename(found.agent.session, title)
+          const normalized = titles.normalize(title)
+          let authoritative
+          try {
+            authoritative = await ctx.get('sessionAuthority')?.rename?.(sessionId, normalized)
+          } catch {
+            return err(request, {
+              code: 'internal',
+              message: 'external Session authority rename failed',
+              details: {},
+            })
+          }
+          const accepted = authoritative === undefined
+            ? titles.rename(found.agent.session, normalized)
+            : titles.projectExternal(
+              found.agent.session,
+              authoritative.title,
+              authoritative.authority,
+            )
           return ok(request, {
             title: accepted.title,
             seq: logicalSeqForPhysical(found.agent.session, accepted.eventSeq),

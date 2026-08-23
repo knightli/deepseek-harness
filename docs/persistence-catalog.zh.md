@@ -665,7 +665,18 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[SessionTitleEventData](subsystems/session-title.md)
 
-来源：[`packages/session/session-title/src/index.ts:100`](../packages/session/session-title/src/index.ts)
+来源：[`packages/session/session-title/src/index.ts:124`](../packages/session/session-title/src/index.ts)
+
+<a id="sessiontitle-cleared--log-only"></a>
+
+#### `session/title-cleared` — log-only
+
+```ts persistence-catalog
+/** Latest external title was removed; projection falls back to no title. */
+'session/title-cleared': SessionTitleClearedEventData
+```
+
+来源：[`packages/session/session-title/src/index.ts:126`](../packages/session/session-title/src/index.ts)
 
 <a id="sessiontitle-llm-request--log-only"></a>
 

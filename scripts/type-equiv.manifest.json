@@ -607,6 +607,16 @@
     },
     {
       "doc": "docs/subsystems/session-title.md",
+      "symbol": "SessionTitleAuthorityId",
+      "source": "packages/session/session-title/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/session-title.md",
+      "symbol": "SessionAuthorityRename",
+      "source": "packages/host/apiproxy/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/session-title.md",
       "symbol": "SessionTitleModelProvenance",
       "source": "packages/session/session-title/src/index.ts"
     },

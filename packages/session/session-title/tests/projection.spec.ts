@@ -14,7 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import SessionTitleService from '@deepseek-ai/dsh-session-title'
+import SessionTitleService, { SessionTitleAuthorityId } from '@deepseek-ai/dsh-session-title'
 
 const CONFIG = { fallbackMaxWords: 8, fallbackMaxBytes: 64, maxTitleBytes: 256 }
 
@@ -55,6 +55,36 @@ describe('title projection unit', () => {
     const snapshot = ctx.sessionProjections.snapshot(session)
     expect(snapshot.values.title).toBe('Second title')
     expect(snapshot.asOfSeq).toBe(session.seq - 1)
+  })
+
+  it('returns to null when the external authority clears its title', async () => {
+    const { ctx, session } = await harness(true)
+    const authority = SessionTitleAuthorityId('native-test')
+    ctx.sessionTitle.projectExternal(session, 'Native title', authority)
+
+    ctx.sessionTitle.clearExternal(session, authority)
+
+    expect(ctx.sessionProjections.snapshot(session).values.title).toBeNull()
+    expect(ctx.sessionProjections.checkpoint(session).title).toMatchObject({
+      ver: 2,
+      val: null,
+    })
+  })
+
+  it('records an initial external clear as durable empty-title ownership', async () => {
+    const { ctx, session } = await harness(true)
+    const authority = SessionTitleAuthorityId('native-empty-test')
+
+    ctx.sessionTitle.clearExternal(session, authority)
+    const seq = session.seq
+    ctx.sessionTitle.clearExternal(session, authority)
+
+    expect(session.events.at(-1)).toMatchObject({
+      type: 'session/title-cleared',
+      data: { authority },
+    })
+    expect(session.seq).toBe(seq)
+    expect(ctx.sessionProjections.snapshot(session).values.title).toBeNull()
   })
 
   it('folds titles already in the log when the service mounts late (lazy cell build)', async () => {

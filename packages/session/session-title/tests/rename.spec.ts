@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionTitleService, {
+  SessionTitleAuthorityId,
   SessionTitleProviderId,
   foldSessionTitle,
   type SessionTitleProviderRequest,
@@ -29,6 +30,100 @@ function appendHumanPrompt(session: ReturnType<Context['sessions']['create']>, t
 }
 
 describe('SessionTitleService.rename', () => {
+  it('projects an idempotent externally-authoritative title onto detached history', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+    const session = Session.create(SessionId('external-title'))
+    const authority = SessionTitleAuthorityId('native-test')
+
+    const first = ctx.sessionTitle.projectExternal(session, '  Native   title  ', authority)
+    const repeated = ctx.sessionTitle.projectExternal(session, 'Native title', authority)
+
+    expect(first).toMatchObject({
+      title: 'Native title',
+      messageSeqs: [],
+      source: { kind: 'external', authority: 'native-test' },
+    })
+    expect(repeated).toEqual(first)
+    expect(session.events.filter(event => event.type === 'session/title')).toHaveLength(1)
+  })
+
+  it('fences external titles from another authority and local mutation paths', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+    const session = ctx.sessions.create(SessionId('external-title-fenced'))
+    const authority = SessionTitleAuthorityId('native-test')
+    ctx.sessionTitle.projectExternal(session, 'Native title', authority)
+
+    expect(() => ctx.sessionTitle.projectExternal(
+      session,
+      'Other title',
+      SessionTitleAuthorityId('other-native'),
+    )).toThrow(/different external authority/)
+    expect(() => ctx.sessionTitle.rename(session, 'Local title')).toThrow(/external authority/)
+    await expect(ctx.sessionTitle.refresh(session)).rejects.toThrow(/external authority/)
+    expect(ctx.sessionTitle.get(session)?.title).toBe('Native title')
+  })
+
+  it('clears an externally-authoritative title idempotently on detached history', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+    const session = Session.create(SessionId('external-title-cleared'))
+    const authority = SessionTitleAuthorityId('native-test')
+    ctx.sessionTitle.projectExternal(session, 'Native title', authority)
+
+    ctx.sessionTitle.clearExternal(session, authority)
+    ctx.sessionTitle.clearExternal(session, authority)
+
+    expect(ctx.sessionTitle.get(session)).toBeUndefined()
+    expect(session.events.filter(event => event.type === 'session/title-cleared')).toHaveLength(1)
+  })
+
+  it('keeps the external authority fence after its visible title is cleared', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+    const session = ctx.sessions.create(SessionId('external-title-cleared-fence'))
+    const authority = SessionTitleAuthorityId('native-test')
+    ctx.sessionTitle.projectExternal(session, 'Native title', authority)
+    ctx.sessionTitle.clearExternal(session, authority)
+
+    expect(() => ctx.sessionTitle.projectExternal(
+      session,
+      'Other title',
+      SessionTitleAuthorityId('other-native'),
+    )).toThrow(/different external authority/)
+    expect(() => ctx.sessionTitle.rename(session, 'Local title')).toThrow(/external authority/)
+    await expect(ctx.sessionTitle.refresh(session)).rejects.toThrow(/external authority/)
+
+    appendHumanPrompt(session, 'Prompt after the external title was cleared')
+    await settle()
+    expect(ctx.sessionTitle.get(session)).toBeUndefined()
+    expect(session.events.filter(event => event.type === 'session/title')).toHaveLength(1)
+  })
+
+  it('clears a legacy local title when the external authority reports no title', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, CONFIG)
+    const session = Session.create(SessionId('legacy-local-title-cleared'))
+    const authority = SessionTitleAuthorityId('native-test')
+    session.append('session/title', {
+      title: 'Legacy local title',
+      messageSeqs: [],
+      source: { kind: 'user' },
+    })
+
+    ctx.sessionTitle.clearExternal(session, authority)
+
+    expect(ctx.sessionTitle.get(session)).toBeUndefined()
+    expect(session.events.findLast(event => event.type === 'session/title-cleared')?.data)
+      .toEqual({ authority })
+  })
+
   it('appends a normalized user-source title', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

@@ -1031,6 +1031,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sessionAuthority',
+    summary: 'Optional per-Session authority bridge; unowned identities are no-ops.',
+    description: 'Optional per-Session authority bridge; unowned identities are no-ops.',
+    methods: [
+      {
+        signature: 'refresh(sessionId: SessionId): Promise<void>',
+        description: 'Reconcile an externally-owned Session before a cold or idle access.',
+        parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose binding is authoritative.' }],
+        returns: 'when the same Session has been refreshed or is not externally owned.',
+      },
+      {
+        signature: 'rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | undefined>',
+        description: 'Mutate the external authority before projecting an accepted rename locally.',
+        parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose binding is authoritative.' }, { name: 'title', description: 'already normalized non-empty title requested by the caller.' }],
+        returns: 'accepted external projection, or `undefined` for an unowned Session.',
+      },
+    ],
+  },
+  {
     key: 'sessionPersistence',
     summary: 'Durable append-only session storage.',
     description: 'Durable append-only session storage. Implementations preserve contiguous, losslessly JSON-serializable events; append resolves only after durability, and load balances a complete interrupted tail without rewriting committed events.',
@@ -1386,6 +1405,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read the latest folded title from one live or replayed session.',
         parameters: [{ name: 'session', description: 'session whose log is the title source of truth.' }],
         returns: 'latest title snapshot, or `undefined` before eligible input.',
+      },
+      {
+        signature: 'normalize(title: string): string',
+        description: 'Normalize and validate one explicit title without mutating a Session.',
+        parameters: [{ name: 'title', description: 'raw explicit title.' }],
+        returns: 'normalized non-empty title.',
+      },
+      {
+        signature: 'projectExternal( session: Session, title: string, authority: SessionTitleAuthorityId, ): SessionTitleSnapshot',
+        description: 'Project the current title owned by an external authority. Detached replay Sessions are accepted so a caller can persist the appended event before exposing or resuming the Session. An exact current projection is a no-op.',
+        parameters: [{ name: 'session', description: 'live or replayed Session receiving the projection.' }, { name: 'title', description: 'raw non-empty title reported by the authority.' }, { name: 'authority', description: 'stable owner of the projected title.' }],
+        returns: 'latest externally-owned title snapshot.',
+      },
+      {
+        signature: 'clearExternal(session: Session, authority: SessionTitleAuthorityId): void',
+        description: 'Clear the current title when an external authority reports no title. This deliberately supersedes legacy local sources; a title owned by a different external authority remains fenced.',
+        parameters: [{ name: 'session', description: 'live or replayed Session receiving the clearing event.' }, { name: 'authority', description: 'stable owner of the title being removed.' }],
       },
       {
         signature: 'rename(session: Session, title: string): SessionTitleSnapshot',
@@ -3759,6 +3795,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionAppendEventType = Exclude<SessionEventType, \'session/history-insert\'>;',
   },
   {
+    name: 'SessionAuthorityRename',
+    declaration: 'export interface SessionAuthorityRename {\n    readonly title: string;\n    readonly authority: SessionTitleAuthorityId;\n}',
+  },
+  {
     name: 'SessionAvailability',
     declaration: 'export type SessionAvailability = \'live\' | \'persisted\';',
   },
@@ -3963,6 +4003,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionTelemetrySharingStatus = \'full\' | \'feedback-only\' | \'disabled\';',
   },
   {
+    name: 'SessionTitleAuthorityId',
+    declaration: 'export type SessionTitleAuthorityId = Branded<\'SessionTitleAuthorityId\'>;',
+  },
+  {
     name: 'SessionTitleAutomaticMode',
     declaration: 'export type SessionTitleAutomaticMode = \'first-prompt\' | \'all-prompts\';',
   },
@@ -4004,7 +4048,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionTitleSource',
-    declaration: 'export type SessionTitleSource = {\n    readonly kind: \'fallback\';\n} | {\n    readonly kind: \'provider\';\n    readonly provider: SessionTitleProviderId;\n    readonly model?: SessionTitleModelProvenance;\n} | {\n    readonly kind: \'user\';\n};',
+    declaration: 'export type SessionTitleSource = {\n    readonly kind: \'fallback\';\n} | {\n    readonly kind: \'provider\';\n    readonly provider: SessionTitleProviderId;\n    readonly model?: SessionTitleModelProvenance;\n} | {\n    readonly kind: \'user\';\n} | {\n    readonly kind: \'external\';\n    readonly authority: SessionTitleAuthorityId;\n};',
   },
   {
     name: 'SessionTitleUserMessage',

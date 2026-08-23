@@ -7,13 +7,13 @@
  * it, rename included.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import SessionTitleService from '@deepseek-ai/dsh-session-title'
+import SessionTitleService, { SessionTitleAuthorityId } from '@deepseek-ai/dsh-session-title'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import { SessionHistoryReceipt } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
@@ -72,6 +72,55 @@ function liveAgent(ctx: Context, id: string, turns: number): Session {
 const api = (ctx: Context) => createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
 describe('sessions.rename', () => {
+  it('mutates an external authority before projecting its accepted title', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-authority-rename', 1)
+    const rename = vi.fn(async (_sessionId: SessionId, title: string) => ({
+      title,
+      authority: SessionTitleAuthorityId('native-test'),
+    }))
+    ctx.provide('sessionAuthority', { refresh: () => Promise.resolve(), rename })
+
+    const renamed = await api(ctx).sessions.rename(request({
+      sessionId: source.id,
+      title: '  native   accepted  ',
+    }))
+
+    expect(renamed.result.ok).toBe(true)
+    expect(rename).toHaveBeenCalledWith(source.id, 'native accepted')
+    expect(source.events.findLast(event => event.type === 'session/title')?.data).toEqual({
+      title: 'native accepted',
+      messageSeqs: [],
+      source: { kind: 'external', authority: 'native-test' },
+    })
+  })
+
+  it('leaves no local title when the external authority rejects rename', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-authority-rename-failure', 1)
+    const privateDetail = 'private native path and protocol detail'
+    ctx.provide('sessionAuthority', {
+      refresh: () => Promise.resolve(),
+      rename: () => Promise.reject(new Error(privateDetail)),
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const before = source.events.filter(event => event.type === 'session/title')
+
+    const renamed = await api(ctx).sessions.rename(request({ sessionId: source.id, title: 'name' }))
+
+    expect(renamed.result.ok).toBe(false)
+    expect(renamed.result).toEqual({
+      ok: false,
+      error: {
+        code: 'internal',
+        message: 'external Session authority rename failed',
+        details: {},
+      },
+    })
+    expect(JSON.stringify(renamed.result)).not.toContain(privateDetail)
+    expect(source.events.filter(event => event.type === 'session/title')).toEqual(before)
+  })
+
   it('accepts through the composed title service: normalized user-source event, echoed seq', async () => {
     const ctx = await composed()
     const source = liveAgent(ctx, 'session-rename', 1)
