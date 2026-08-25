@@ -483,8 +483,8 @@ declare class Session {
     ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent] : []
   ): SessionEvent<T>;
   /**
-   * Atomically append one physical history record that expands to a complete
-   * closed event group immediately before an existing logical event.
+   * Atomically append one physical history record that expands to complete
+   * closed turns or steps immediately before a matching logical start event.
    * @param command - receipt, logical anchor, and complete closed event group.
    * @returns whether the insertion committed or was an exact idempotent retry.
    * @throws when the Session is live, or the group, anchor, or receipt conflicts.
@@ -764,7 +764,7 @@ fork(source: SessionForkSource, boundary?: number, childSessionId?: SessionId): 
 
 Types: [CreateSessionOptions](persistence.md) · [PrepareSessionOptions](persistence.md) · [SessionId](core.md)
 
-Source: [`packages/core/session/src/index.ts:1250`](../../packages/core/session/src/index.ts)
+Source: [`packages/core/session/src/index.ts:1268`](../../packages/core/session/src/index.ts)
 
 <a id="session-events"></a>
 

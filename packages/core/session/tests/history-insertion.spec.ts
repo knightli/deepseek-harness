@@ -39,6 +39,30 @@ function closedTurnMembers(turn: number, text: string): readonly SessionHistoryM
   ]
 }
 
+function appendClosedStep(session: Session, turn: number, step: number, text: string): void {
+  session.append('step/start', { turn, step })
+  session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+  session.append('step/end', { turn, step })
+}
+
+function closedStepMembers(turn: number, step: number, text: string): readonly SessionHistoryMember[] {
+  return [
+    { type: 'step/start', time: step * 10, data: { turn, step } },
+    {
+      type: 'user/message',
+      time: step * 10 + 1,
+      data: createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'plugin', plugin: 'history-import' },
+      }),
+    },
+    { type: 'step/end', time: step * 10 + 2, data: { turn, step } },
+  ]
+}
+
 function userTexts(history: SessionHistorySnapshot): string[] {
   return history.entries.flatMap((entry) => {
     if (entry.type !== 'user/message') return []
@@ -53,6 +77,66 @@ function derivedTexts(session: Session): string[] {
 }
 
 describe('ordered Session history insertion', () => {
+  it('inserts one closed step before a stable later step in the same turn', () => {
+    const session = Session.create(SessionId('ordered-step-history'))
+    session.append('turn/start', { turn: 1 })
+    appendClosedStep(session, 1, 1, 'before')
+    appendClosedStep(session, 1, 2, 'after')
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const anchor = session.history.entries.find(
+      entry => entry.type === 'step/start' && entry.data.step === 2,
+    )
+    expect(anchor).toBeDefined()
+
+    session.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('step-growth-1'),
+      before: anchor!.id,
+      members: closedStepMembers(1, 2, 'inserted'),
+    })
+
+    expect(userTexts(session.history)).toEqual(['before', 'inserted', 'after'])
+    expect(session.history.events.flatMap(event => event.type === 'step/start'
+      ? [event.data.step]
+      : [])).toEqual([1, 2, 3])
+    const replay = Session.create(
+      SessionId('ordered-step-history-replay'),
+      structuredClone(session.events),
+    )
+    expect(userTexts(replay.history)).toEqual(['before', 'inserted', 'after'])
+    expect(derivedTexts(replay)).toEqual(['before', 'inserted', 'after'])
+  })
+
+  it('rejects a capsule whose complete group kind does not match its anchor', () => {
+    const session = Session.create(SessionId('history-group-anchor-kind'))
+    session.append('turn/start', { turn: 1 })
+    appendClosedStep(session, 1, 1, 'before')
+    appendClosedStep(session, 1, 2, 'after')
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    appendClosedTurn(session, 2, 'later')
+    const stepAnchor = session.history.entries.find(
+      entry => entry.type === 'step/start' && entry.data.step === 2,
+    )!
+    const turnAnchor = session.history.entries.find(
+      entry => entry.type === 'turn/start' && entry.data.turn === 2,
+    )!
+
+    expect(() => session.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('step-at-turn'),
+      before: turnAnchor.id,
+      members: closedStepMembers(1, 2, 'step'),
+    })).toThrow(expect.objectContaining({ code: 'PLACEMENT_SPLITS_GROUP' }))
+    expect(() => session.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('turn-at-step'),
+      before: stepAnchor.id,
+      members: closedTurnMembers(3, 'turn'),
+    })).toThrow(expect.objectContaining({ code: 'PLACEMENT_SPLITS_GROUP' }))
+    expect(() => session.insertHistoryGroup({
+      receipt: SessionHistoryReceipt('mixed-group'),
+      before: stepAnchor.id,
+      members: [...closedStepMembers(1, 2, 'step'), ...closedTurnMembers(3, 'turn')],
+    })).toThrow(expect.objectContaining({ code: 'GROUP_INVALID' }))
+  })
+
   it('inserts one closed group before a stable later event and replays the same order', () => {
     const session = Session.create(SessionId('ordered-history'))
     appendClosedTurn(session, 1, 'A')

@@ -40,7 +40,7 @@
 - `session.deriveMessages()` 对每个新的 surface 条目只做一次增量投影，并返回一个新数组，其中包含这些条目存储的完整、带标识且冻结的消息。assistant 消息的模型来源会保留生成该消息的提供方和模型，以及适配器私有回放状态。surface 重写会重建投影；不存在原始日志回退。
 - `session.deriveEventMessage(event)` 是重建和请求检查使用的规范逐事件投影。
 - `session.surface` 暴露只读 `SessionSurface` 视图，由会话唯一的增量 surface 管理器所有；每次提交重写，`replaceGeneration` 都会变化。
-- `session.insertHistoryGroup({ receipt, before, members })` 会为放在稳定逻辑 `turn/start` 之前的完整关闭 turn 原子追加一条 required physical capsule；相同 receipt 的精确重试是 no-op，冲突会失败关闭。有序插入只属于准备阶段：必须在 detached Session 上完成，再通过 `ctx.sessions.enter()` 发布。已 attached/live 的 Session 会以 `LIVE_SESSION_UNSUPPORTED` 拒绝插入。
+- `session.insertHistoryGroup({ receipt, before, members })` 会为放在匹配的稳定逻辑 `turn/start` 或 `step/start` 之前的完整关闭 turn 或 step 原子追加一条 required physical capsule；相同 receipt 的精确重试是 no-op，冲突会失败关闭。有序插入只属于准备阶段：必须在 detached Session 上完成，再通过 `ctx.sessions.enter()` 发布。已 attached/live 的 Session 会以 `LIVE_SESSION_UNSUPPORTED` 拒绝插入。
 - `session.history` 暴露不可变的逻辑 `entries` 和按展示顺序连续的 `events`；`materializeSessionHistory(events)` 为 detached physical log 提供同一规范 fold。Host 分页会保持每个 insertion receipt 事件组不可拆分；Host fork 只有在精确物理前缀可重新物化为请求的逻辑前缀时才成功。参见[有序历史决策](../../../.agents/notes/implemented/architecture/2026-08-22-atomic-session-history-insertion.md)。
 - `session.events` 是按追加失效的缓存冻结快照；已接受事件保持深度冻结。
 - `session.seq`、`session.id`：当前序号和只读类型化身份。

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-22-atomic-session-history-insertion.md
-2026-08-22-atomic-session-history-insertion.md: ba42ab6b48448c8b66ed938597e3e781425a5b66
-2026-08-22-atomic-session-history-insertion.zh.md: b85d8e754ea9c44b180540936c17130a6e49f26b
+2026-08-22-atomic-session-history-insertion.md: a5d82e59da74e5681dbe3c044c204673729a3008
+2026-08-22-atomic-session-history-insertion.zh.md: d10b208f4c1fcfbea69635467314d1ae6149326a

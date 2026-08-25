@@ -163,12 +163,22 @@ function physicalSurfaceOp(op: SurfaceOp): SessionHistorySurfaceOp {
     : { op: 'replace', start: physicalEntryId(op.start), end: physicalEntryId(op.end) }
 }
 
-/** Validate that one insertion is a non-empty sequence of complete closed turns. */
-function assertClosedMembers(members: readonly SessionHistoryMember[]): void {
+type HistoryInsertionGroupKind = 'turns' | 'steps'
+
+/** Validate that one insertion contains only complete closed turns or steps. */
+function assertClosedMembers(members: readonly SessionHistoryMember[]): HistoryInsertionGroupKind {
   if (members.length === 0) throw new SessionHistoryInsertError('GROUP_INVALID', 'session history insertion group must not be empty')
+  const groupKind: HistoryInsertionGroupKind = members[0]?.type === 'turn/start'
+    ? 'turns'
+    : members[0]?.type === 'step/start'
+      ? 'steps'
+      : (() => {
+        throw new SessionHistoryInsertError('GROUP_INVALID', 'session history insertion group must start with a turn or step')
+      })()
   let openTurn: number | undefined
   let openStep: number | undefined
   let completedTurns = 0
+  let completedSteps = 0
   for (const [index, member] of members.entries()) {
     if (!Number.isSafeInteger(member.time)) {
       throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} time must be a safe integer`)
@@ -191,15 +201,18 @@ function assertClosedMembers(members: readonly SessionHistoryMember[]): void {
     }
     switch (member.type) {
       case 'turn/start':
-        if (openTurn !== undefined || openStep !== undefined) {
+        if (groupKind !== 'turns' || openTurn !== undefined || openStep !== undefined) {
           throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} opens a nested turn`)
         }
         openTurn = member.data.turn
         break
       case 'step/start':
-        if (openTurn !== member.data.turn || openStep !== undefined) {
+        if ((groupKind === 'turns' && openTurn !== member.data.turn)
+          || (groupKind === 'steps' && openTurn !== undefined && openTurn !== member.data.turn)
+          || openStep !== undefined) {
           throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} opens an invalid step`)
         }
+        if (groupKind === 'steps') openTurn = member.data.turn
         openStep = member.data.step
         break
       case 'step/end':
@@ -207,9 +220,10 @@ function assertClosedMembers(members: readonly SessionHistoryMember[]): void {
           throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} closes an invalid step`)
         }
         openStep = undefined
+        if (groupKind === 'steps') completedSteps++
         break
       case 'turn/end':
-        if (openTurn !== member.data.turn || openStep !== undefined) {
+        if (groupKind !== 'turns' || openTurn !== member.data.turn || openStep !== undefined) {
           throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} closes an invalid turn`)
         }
         openTurn = undefined
@@ -219,7 +233,7 @@ function assertClosedMembers(members: readonly SessionHistoryMember[]): void {
         if (openTurn === undefined) {
           throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} is outside a turn`)
         }
-        if (isSurfaceEligibleType(member.type) && openStep === undefined) {
+        if ((groupKind === 'steps' || isSurfaceEligibleType(member.type)) && openStep === undefined) {
           throw new SessionHistoryInsertError('GROUP_INVALID', `session history member ${index} is outside a step`)
         }
         const location = member.data as { readonly turn?: unknown; readonly step?: unknown }
@@ -233,9 +247,11 @@ function assertClosedMembers(members: readonly SessionHistoryMember[]): void {
       }
     }
   }
-  if (openTurn !== undefined || openStep !== undefined || completedTurns === 0) {
-    throw new SessionHistoryInsertError('GROUP_INVALID', 'session history insertion group must contain only complete closed turns')
+  if ((groupKind === 'turns' && (openTurn !== undefined || completedTurns === 0))
+    || (groupKind === 'steps' && (openStep !== undefined || completedSteps === 0))) {
+    throw new SessionHistoryInsertError('GROUP_INVALID', 'session history insertion group must contain only complete closed turns or steps')
   }
+  return groupKind
 }
 
 /** Build one logical entry for an ordinary physical event. */
@@ -406,11 +422,12 @@ class HistoryManager {
         entryIds: folded.entryIdsByReceipt.get(record.receipt) ?? [],
       }
     }
-    assertClosedMembers(record.members)
+    const groupKind = assertClosedMembers(record.members)
     const anchor = folded.snapshot.entries.find(entry => entry.id === record.before)
     if (anchor === undefined) throw new SessionHistoryInsertError('ANCHOR_NOT_FOUND', 'session history anchor does not exist')
-    if (anchor.type !== 'turn/start') {
-      throw new SessionHistoryInsertError('PLACEMENT_SPLITS_GROUP', 'session history anchor is not a closed turn boundary')
+    const expectedAnchor = groupKind === 'turns' ? 'turn/start' : 'step/start'
+    if (anchor.type !== expectedAnchor) {
+      throw new SessionHistoryInsertError('PLACEMENT_SPLITS_GROUP', `session history ${groupKind} insertion requires a ${expectedAnchor} anchor`)
     }
     const entries = insertedEntries(record)
     return {
@@ -446,14 +463,15 @@ class HistoryManager {
       }
       const record = event.data
       assertInsertRecordShape(record)
-      assertClosedMembers(record.members)
+      const groupKind = assertClosedMembers(record.members)
       const previous = records.get(record.receipt)
       if (previous !== undefined) {
         throw new SessionHistoryInsertError('HISTORY_CORRUPT', 'session history contains a duplicate receipt')
       }
       const anchorIndex = entries.findIndex(entry => entry.id === record.before)
       if (anchorIndex < 0) throw new SessionHistoryInsertError('HISTORY_CORRUPT', 'session history contains a missing insertion anchor')
-      if (entries[anchorIndex]?.type !== 'turn/start') {
+      const expectedAnchor = groupKind === 'turns' ? 'turn/start' : 'step/start'
+      if (entries[anchorIndex]?.type !== expectedAnchor) {
         throw new SessionHistoryInsertError('HISTORY_CORRUPT', 'session history contains an invalid insertion anchor')
       }
       const inserted = insertedEntries(record, event.seq)
@@ -1028,8 +1046,8 @@ export class Session {
   }
 
   /**
-   * Atomically append one physical history record that expands to a complete
-   * closed event group immediately before an existing logical event.
+   * Atomically append one physical history record that expands to complete
+   * closed turns or steps immediately before a matching logical start event.
    * @param command - receipt, logical anchor, and complete closed event group.
    * @returns whether the insertion committed or was an exact idempotent retry.
    * @throws when the Session is live, or the group, anchor, or receipt conflicts.

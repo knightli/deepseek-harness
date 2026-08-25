@@ -405,7 +405,7 @@ export interface SessionHistoryInsertRecord {
   readonly members: readonly SessionHistoryMember[]
 }
 
-/** Public command for inserting one complete event group before an existing event. */
+/** Public command for inserting complete closed turns or steps before a matching boundary. */
 export interface InsertSessionHistoryGroup {
   readonly receipt: SessionHistoryReceipt
   readonly before: SessionHistoryEntryId
