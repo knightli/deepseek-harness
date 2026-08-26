@@ -265,6 +265,127 @@ describe('attached updatedAt tracks human prompts', () => {
 })
 
 describe('cold history recovery view', () => {
+  it('keeps externally-owned model discovery read-only before writer acquisition', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const sessionId = sid('session-authority-models-pending')
+    const refresh = vi.fn(() => Promise.reject(new Error('writer acquisition must not run')))
+    const describeSession = vi.fn(() => Promise.resolve({
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: false, fork: false },
+    }))
+    ctx.provide('sessionAuthority', { refresh, describe: describeSession })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const models = await api.sessions.models(request({ sessionId }))
+
+    expect(models.result).toEqual({
+      ok: false,
+      error: {
+        code: 'internal',
+        message: 'model metadata is unavailable until this session acquires its writer',
+        details: { sessionId },
+      },
+    })
+    expect(describeSession).toHaveBeenCalledOnce()
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('refuses unsupported external mutations before resolving a cold Agent', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const sessionId = sid('session-authority-unsupported-mutations')
+    const refresh = vi.fn(() => Promise.reject(new Error('writer acquisition must not run')))
+    const describeSession = vi.fn(() => Promise.resolve({
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: false, fork: false },
+    }))
+    ctx.provide('sessionAuthority', { refresh, describe: describeSession })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const selected = await api.sessions.selectModel(request({
+      sessionId,
+      provider: 'p',
+      model: 'other',
+    }))
+    const prompted = await api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'image', mediaType: 'image/png', data: 'AQ==' }],
+    }))
+
+    expect(selected.result).toEqual({
+      ok: false,
+      error: {
+        code: 'model-unavailable',
+        message: 'model selection is unavailable for this session',
+        details: { provider: 'p', model: 'other' },
+      },
+    })
+    expect(prompted.result).toEqual({
+      ok: false,
+      error: {
+        code: 'attachment-error',
+        message: 'This session does not support image input.',
+        details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+      },
+    })
+    expect(describeSession).toHaveBeenCalledTimes(2)
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('exposes writer contention only at the text-prompt acquisition boundary', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = sid('session-authority-writer-busy')
+    const meta = header(sessionId, 1)
+    ctx.provide('sessionPersistence', {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events: [] }),
+      locate: () => undefined,
+    } as never)
+    ctx.agents.setFactory({
+      createAgent: () => Promise.reject(new Error('create must not run')),
+      resume: () => Promise.reject(new Error(
+        'CodexThreadBusyError: Codex thread writer is busy',
+      )),
+    })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const models = await api.sessions.models(request({ sessionId }))
+    const prompted = await api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text: 'acquire the writer' }],
+    }))
+
+    expect(models.result).toMatchObject({
+      ok: false,
+      error: { code: 'internal' },
+    })
+    expect(prompted.result).toEqual({
+      ok: false,
+      error: {
+        code: 'thread-busy',
+        message: 'Codex thread writer is busy; retry after the active writer becomes idle',
+        details: { sessionId },
+      },
+    })
+  })
+
   it('refreshes an externally-owned cold Session before serving its tail page', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

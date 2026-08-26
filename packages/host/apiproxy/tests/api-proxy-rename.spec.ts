@@ -72,6 +72,31 @@ function liveAgent(ctx: Context, id: string, turns: number): Session {
 const api = (ctx: Context) => createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
 describe('sessions.rename', () => {
+  it('renames a cold external Session without resolving an Agent', async () => {
+    const ctx = await composed()
+    const sessionId = sid('session-authority-cold-rename')
+    const refresh = vi.fn(() => Promise.reject(new Error('writer acquisition must not run')))
+    const rename = vi.fn(async (_sessionId: SessionId, title: string) => ({
+      title,
+      authority: SessionTitleAuthorityId('native-test'),
+      seq: 17,
+    }))
+    ctx.provide('sessionAuthority', { refresh, rename })
+
+    const renamed = await api(ctx).sessions.rename(request({
+      sessionId,
+      title: '  native   accepted  ',
+    }))
+
+    expect(renamed.result).toEqual({
+      ok: true,
+      value: { title: 'native accepted', seq: 17 },
+    })
+    expect(rename).toHaveBeenCalledWith(sessionId, 'native accepted')
+    expect(refresh).not.toHaveBeenCalled()
+    expect(ctx.agents.get(sessionId)).toBeUndefined()
+  })
+
   it('mutates an external authority before projecting its accepted title', async () => {
     const ctx = await composed()
     const source = liveAgent(ctx, 'session-authority-rename', 1)

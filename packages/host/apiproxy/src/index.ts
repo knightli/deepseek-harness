@@ -15,9 +15,11 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
+import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionTitleAuthorityId } from '@deepseek-ai/dsh-session-title'
 import type { ApiProxy } from './api/index.ts'
+import type { SessionCapabilities } from './api/sessions.ts'
 import { createApiProxy, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES } from './api-proxy.ts'
 import {
   DEFAULT_SESSION_LOG_COMPRESSION_LEVEL,
@@ -45,12 +47,29 @@ declare module '@deepseek-ai/cordis' {
 export interface SessionAuthorityRename {
   readonly title: string
   readonly authority: SessionTitleAuthorityId
+  /** Logical title-event seq when the authority projected a cold Session itself. */
+  readonly seq?: number
+}
+
+/** Read-only facts an external authority can expose without acquiring a live Agent. */
+export interface SessionAuthorityDescription {
+  /** Known writer model; absent while discovery has not acquired a writer yet. */
+  readonly current?: ModelSelection
+  /** Whether ordinary text may acquire the writer and execute externally. */
+  readonly routable: boolean
+  /** Operations admitted before resolving a live Agent. */
+  readonly capabilities: SessionCapabilities
 }
 
 /** Optional per-Session authority bridge; unowned identities are no-ops. */
 export interface SessionAuthority {
   /** Refresh externally-owned Session rows before the stock session.list snapshot. */
   refreshCatalog?(): Promise<void>
+  /**
+   * Describe an externally-owned Session without refreshing or acquiring it.
+   * @returns authoritative read-only facts, or `undefined` for an unowned Session.
+   */
+  describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>
   /**
    * Reconcile an externally-owned Session before a cold or idle access.
    * @param sessionId - exact DSH Session identity whose binding is authoritative.

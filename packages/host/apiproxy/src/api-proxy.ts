@@ -1368,17 +1368,27 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         },
       }
     }
-    const resolved = await resolveAgent(sessionId)
-    if ('error' in resolved
-      && resolved.error.code === 'internal'
-      && resolved.error.message.includes('CodexThreadBusyError: Codex thread writer is busy')) {
-      return { error: {
-        code: 'thread-busy' as const,
-        message: 'Codex thread writer is busy; retry after the active writer becomes idle',
-        details: { sessionId },
-      } }
+    return resolveAgent(sessionId)
+  }
+
+  /** Read external admission facts without refreshing or resolving a cold Agent. */
+  async function describeExternalSession(sessionId: SessionId) {
+    if (ctx.get('agents')?.get(sessionId) !== undefined) {
+      return { description: undefined }
     }
-    return resolved
+    try {
+      return {
+        description: await ctx.get('sessionAuthority')?.describe?.(sessionId),
+      }
+    } catch {
+      return {
+        error: {
+          code: 'internal' as const,
+          message: 'external Session authority description failed',
+          details: {},
+        },
+      }
+    }
   }
 
   /** Send one transient frame to every connected mux consumer. */
@@ -2022,7 +2032,19 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     request: RpcRequest<unknown>, sessionId: SessionId, contentKind: 'text-only' | 'with-image',
   ): Promise<{ agent: Agent } | { refused: RpcResponse<T> }> {
     const found = await agentFor(sessionId)
-    if ('error' in found) return { refused: err(request, found.error) }
+    if ('error' in found) {
+      if (found.error.code === 'internal'
+        && found.error.message.includes('CodexThreadBusyError: Codex thread writer is busy')) {
+        return {
+          refused: err(request, {
+            code: 'thread-busy',
+            message: 'Codex thread writer is busy; retry after the active writer becomes idle',
+            details: { sessionId },
+          }),
+        }
+      }
+      return { refused: err(request, found.error) }
+    }
     const agent = found.agent
     if (contentKind === 'with-image' && executesTextExternally(agent)) {
       return {
@@ -2471,6 +2493,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async models(request) {
         const { sessionId } = request.payload
+        const described = await describeExternalSession(sessionId)
+        if ('error' in described) return err(request, described.error)
+        const authority = described.description
+        if (authority !== undefined) {
+          if (authority.current === undefined) {
+            return err(request, {
+              code: 'internal',
+              message: 'model metadata is unavailable until this session acquires its writer',
+              details: { sessionId },
+            })
+          }
+          return ok(request, {
+            current: { ...authority.current },
+            routable: authority.routable,
+            capabilities: { ...authority.capabilities },
+            groups: [],
+            failures: [],
+          })
+        }
         const found = await agentFor(sessionId)
         if ('error' in found) return err(request, found.error)
         const current = selectionFor(found.agent).current
@@ -2487,6 +2528,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async selectModel(request) {
         const { sessionId, provider, model, reasoningEffort } = request.payload
+        const described = await describeExternalSession(sessionId)
+        if ('error' in described) return err(request, described.error)
+        if (described.description?.capabilities.modelSelection === false) {
+          return err(request, {
+            code: 'model-unavailable',
+            message: 'model selection is unavailable for this session',
+            details: { provider, model },
+          })
+        }
         const found = await agentFor(sessionId)
         if ('error' in found) return err(request, found.error)
         if (executesTextExternally(found.agent)) {
@@ -2545,8 +2595,6 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async rename(request) {
         const { sessionId, title } = request.payload
-        const found = await agentFor(sessionId)
-        if ('error' in found) return err(request, found.error)
         const titles = ctx.get('sessionTitle')
         if (titles === undefined) {
           return err(request, { code: 'internal', message: 'renaming is unavailable: this deployment mounts no session-title service', details: {} })
@@ -2563,13 +2611,34 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               details: {},
             })
           }
-          const accepted = authoritative === undefined
-            ? titles.rename(found.agent.session, normalized)
-            : titles.projectExternal(
-              found.agent.session,
+          if (authoritative?.seq !== undefined) {
+            return ok(request, {
+              title: authoritative.title,
+              seq: authoritative.seq,
+            })
+          }
+          if (authoritative !== undefined) {
+            const attached = ctx.sessions.get(sessionId)
+            if (attached === undefined) {
+              return err(request, {
+                code: 'internal',
+                message: 'external Session authority rename did not project the cold Session',
+                details: {},
+              })
+            }
+            const accepted = titles.projectExternal(
+              attached,
               authoritative.title,
               authoritative.authority,
             )
+            return ok(request, {
+              title: accepted.title,
+              seq: logicalSeqForPhysical(attached, accepted.eventSeq),
+            })
+          }
+          const found = await agentFor(sessionId)
+          if ('error' in found) return err(request, found.error)
+          const accepted = titles.rename(found.agent.session, normalized)
           return ok(request, {
             title: accepted.title,
             seq: logicalSeqForPhysical(found.agent.session, accepted.eventSeq),
@@ -2776,6 +2845,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           }
         }
         const hasImage = content.some(part => part.type === 'image')
+        if (hasImage) {
+          const described = await describeExternalSession(sessionId)
+          if ('error' in described) return err(request, described.error)
+          if (described.description?.capabilities.imageInput === false) {
+            return err(request, {
+              code: 'attachment-error',
+              message: 'This session does not support image input.',
+              details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+            })
+          }
+        }
         const resolved = await turnAgentFor<{ accepted: true }>(
           request, sessionId, hasImage ? 'with-image' : 'text-only',
         )
