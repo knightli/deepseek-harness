@@ -1344,7 +1344,6 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   async function refreshSessionAuthority(sessionId: SessionId): Promise<void> {
     const agent = ctx.get('agents')?.get(sessionId)
     if (agent?.status === 'running') return
-    if (agent === undefined && ctx.sessions.get(sessionId) !== undefined) return
     try {
       await ctx.get('sessionAuthority')?.refresh(sessionId)
     } catch {
@@ -1369,7 +1368,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         },
       }
     }
-    return resolveAgent(sessionId)
+    const resolved = await resolveAgent(sessionId)
+    if ('error' in resolved
+      && resolved.error.code === 'internal'
+      && resolved.error.message.includes('CodexThreadBusyError: Codex thread writer is busy')) {
+      return { error: {
+        code: 'thread-busy' as const,
+        message: 'Codex thread writer is busy; retry after the active writer becomes idle',
+        details: { sessionId },
+      } }
+    }
+    return resolved
   }
 
   /** Send one transient frame to every connected mux consumer. */
@@ -2201,7 +2210,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       // Logs without a cwd are not served; every session records its project
       // at create time.
       async list(request) {
-        return ok(request, { items: await listVisibleSessionSummaries() })
+        try {
+          await ctx.get('sessionAuthority')?.refreshCatalog?.()
+          return ok(request, { items: await listVisibleSessionSummaries() })
+        } catch {
+          return err(request, {
+            code: 'internal',
+            message: 'external Session catalog refresh failed',
+            details: {},
+          })
+        }
       },
 
       async search(request, signal) {

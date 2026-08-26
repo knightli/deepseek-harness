@@ -49,6 +49,8 @@ export interface SessionAuthorityRename {
 
 /** Optional per-Session authority bridge; unowned identities are no-ops. */
 export interface SessionAuthority {
+  /** Refresh externally-owned Session rows before the stock session.list snapshot. */
+  refreshCatalog?(): Promise<void>
   /**
    * Reconcile an externally-owned Session before a cold or idle access.
    * @param sessionId - exact DSH Session identity whose binding is authoritative.
