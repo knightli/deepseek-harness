@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-部署可以提供 `ctx.sessionAuthority`：读取历史尾页或解析 Agent 前，会刷新由外部权威拥有且处于冷态或 idle 的同一个 Session；正在运行的 Session 保持当前快照。重命名必须先修改外部权威，成功后才投影其接受的标题；拒绝不会改变本地标题历史。
+部署可以提供 `ctx.sessionAuthority`：读取历史尾页或解析 Agent 前，会刷新由外部权威拥有且处于冷态或 idle 的同一个 Session；正在运行的 Session 保持当前快照。外部 writer 无法获取时，Agent 解析返回带目标 `sessionId` 的 `thread-busy`，且不发布本地工作。重命名必须先修改外部权威，成功后才投影其接受的标题；拒绝不会改变本地标题历史。
 
 所有客户端共用的 API 网关由三部分组成：TypeScript API 约定（`src/api/`，不依赖 Node，可从浏览器导入）、fetch 载体对（`src/fetch/`：宿主侧的 `toFetchHandler`，以及客户端侧的 `AbstractApiClient` 与平台子类）和宿主侧实现（`src/api-proxy.ts`：`createApiProxy` 加上默认导出的 `ApiProxyService` 网关插件，其配置为 `{nativeOpen?, sessionExportCompressionLevel?, coldBlankProbeMaxBytes?}`，提供 `ctx.apiProxy`）。该包不注册任何路由；HTTP 等载体自行包装 `ctx.apiProxy`。随发行版交付的 Web 组合位于 [`packages/bundle/web-app/cordis.patch.yml`](../../bundle/web-app/cordis.patch.yml)，其默认 Agent（智能体）模型选择属于 base 组合包中的 [`@deepseek-ai/dsh-agent-default-model`](../../core/agent-default-model/README.md)。
 

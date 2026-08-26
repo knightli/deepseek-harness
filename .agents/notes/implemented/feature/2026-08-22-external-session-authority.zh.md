@@ -16,7 +16,7 @@ Host 此前把每个持久化 Session 都视为本地权威。对于把其他运
 
 外部标题使用 `SessionTitleService.projectExternal` 与 `clearExternal`。持久化事件 `session/title-cleared` 让权威可以明确移除自己的投影标题，包括替换更早的本地 fallback；同一权威仍持有空投影围栏，阻止其他外部权威、本地 rename、refresh 与自动 fallback 覆盖。因此外部报告无标题时，通用标题投影会回到 `null`，而不是保留过期展示文本。
 
-provider 失败会在 gateway 边界收敛。对外的 history、prompt 与 rename 结果只包含稳定的 Host 错误，不会暴露 provider 路径、协议细节或凭据。部署 provider 自己拥有逐 Session 串行、资源生命周期与卸载 drain，因为通用 Host 无法知道外部运行时如何共享。
+provider 失败会在 gateway 边界收敛。对外的 history、prompt 与 rename 结果只包含稳定的 Host 错误，不会暴露 provider 路径、协议细节或凭据。Agent 解析会把外部 writer 不可用映射为带目标 `sessionId` 的 `thread-busy`；被拒绝的请求不会发布本地工作。部署 provider 自己拥有逐 Session 串行、资源生命周期与卸载 drain，因为通用 Host 无法知道外部运行时如何共享。
 
 ## 曾考虑的替代方案
 
@@ -30,4 +30,4 @@ provider 失败会在 gateway 边界收敛。对外的 history、prompt 与 rena
 
 ## 后果
 
-部署可以把一个由外部拥有的会话投影到 stock DSH Session/history/title 视图，并按精确 binding 恢复，而不复制执行状态。尾页读取与已接受的重命名成为异步权威边界，并会在不确定时失败关闭。provider 必须串行化同一 Session 的 refresh 与 rename，并在卸载时 drain 这些操作。Host 测试固定公共错误收敛与精确的外部标题投影；部署层的真实可运行 Host 测试还必须证明具体 provider 在刷新时保持单一运行时拥有者。
+部署可以把一个由外部拥有的会话投影到 stock DSH Session/history/title 视图，并按精确 binding 恢复，而不复制执行状态。尾页读取、writer 获取与已接受的重命名成为异步权威边界，并会在不确定时失败关闭。provider 必须串行化同一 Session 的 refresh 与 rename，并在卸载时 drain 这些操作。Host 测试固定公共错误收敛、`thread-busy` wire 分支与精确的外部标题投影；部署层的真实可运行 Host 测试还必须证明具体 provider 在刷新时保持单一运行时拥有者。
