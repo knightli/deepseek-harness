@@ -380,7 +380,7 @@ describe('cold history recovery view', () => {
       ok: false,
       error: {
         code: 'thread-busy',
-        message: 'Codex thread writer is busy; retry after the active writer becomes idle',
+        message: 'Codex thread writer is busy; retry after the current owner releases it',
         details: { sessionId },
       },
     })

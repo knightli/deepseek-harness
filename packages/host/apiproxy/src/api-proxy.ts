@@ -2038,7 +2038,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         return {
           refused: err(request, {
             code: 'thread-busy',
-            message: 'Codex thread writer is busy; retry after the active writer becomes idle',
+            message: 'Codex thread writer is busy; retry after the current owner releases it',
             details: { sessionId },
           }),
         }
