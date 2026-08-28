@@ -387,6 +387,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SessionSearchRequest: 'session-query.md',
   SessionTitleObservation: 'session-query.md',
   SessionTitleObservationResult: 'session-query.md',
+  SessionAuthorityDescription: 'session-title.md',
+  SessionAuthorityListMetadata: 'session-title.md',
   SessionAuthorityRename: 'session-title.md',
   SessionTitleAuthorityId: 'session-title.md',
   SessionTitleProvider: 'session-title.md',

@@ -39,6 +39,46 @@ function header(id: string, createdAt: number, extra: Partial<SessionHeader> = {
 }
 
 describe('sessions.list cold merge', () => {
+  it('keeps an externally confirmed cold conversation visible without loading its log', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const meta = header('external-header-only', 100)
+    const readFrom = vi.fn(() => Promise.reject(new Error('catalog listing must stay metadata-only')))
+    ctx.provide('sessionPersistence', {
+      list: () => Promise.resolve([meta]),
+      locate: () => ({ kind: 'jsonl', path: join(tmpdir(), 'external-header-only.log') }),
+      readFrom,
+    } as never)
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: () => ({
+        asOfSeq: 0,
+        values: { sessionListMetadata: { blank: true, lastPromptAt: null } },
+      }),
+    } as never)
+    ctx.provide('sessionAuthority', {
+      refresh: () => Promise.resolve(),
+      refreshCatalog: () => Promise.resolve(),
+      listMetadata: (sessionId: SessionId) => (
+        sessionId === meta.id ? { nonBlank: true as const } : undefined
+      ),
+    })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const response = await api.sessions.list(request({}))
+
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) throw new Error('unreachable')
+    expect(response.result.value.items).toContainEqual(expect.objectContaining({
+      sessionId: meta.id,
+      blank: false,
+    }))
+    expect(readFrom).not.toHaveBeenCalled()
+  })
+
   it('verifies only small possibly-blank artifacts and treats every unavailable probe as visible', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

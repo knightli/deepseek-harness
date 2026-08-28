@@ -170,6 +170,16 @@ Durable workspace registry. Startup waits for `sessionPersistence`, builds one c
 async create(path: string, title?: string): Promise<Workspace>
 
 /**
+ * Project an existing Session into an externally authoritative Project.
+ * The immutable Session header remains untouched; only workspace membership
+ * changes. Callers must re-register the projection after each Host restart.
+ * @param sessionId - Existing live or persisted Session identity.
+ * @param projectPath - Existing Project directory selected by the authority.
+ * @returns the Project workspace that now owns the Session row.
+ */
+async projectExternalSession(sessionId: SessionId, projectPath: string): Promise<Workspace>
+
+/**
  * Look up a workspace by id.
  * @param id - Workspace id.
  * @returns the workspace, or `undefined` when unknown.

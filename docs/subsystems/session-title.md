@@ -4,7 +4,7 @@ English | [中文](session-title.zh.md)
 
 Durable latest-wins title state and the optional asynchronous provider vocabulary owned by [`@deepseek-ai/dsh-session-title`](../../packages/session/session-title). The shared LLM helper owns the exact auxiliary request record. Package READMEs own timing, fallback, failure, and fork behavior; the generated [persistence catalog](../persistence-catalog.md) owns the complete event declarations.
 
-Sources: [`packages/session/session-title/src/index.ts`](../../packages/session/session-title/src/index.ts), [`packages/session/session-title-llm/src/index.ts`](../../packages/session/session-title-llm/src/index.ts)
+Sources: [`packages/session/session-title/src/index.ts`](../../packages/session/session-title/src/index.ts), [`packages/session/session-title-llm/src/index.ts`](../../packages/session/session-title-llm/src/index.ts), [`packages/host/apiproxy/src/index.ts`](../../packages/host/apiproxy/src/index.ts)
 
 ## Durable title state
 
@@ -25,6 +25,30 @@ type SessionTitleAuthorityId = Branded<'SessionTitleAuthorityId'>
 interface SessionAuthorityRename {
   readonly title: string
   readonly authority: SessionTitleAuthorityId
+  /** Logical title-event seq when the authority projected a cold Session itself. */
+  readonly seq?: number
+}
+```
+
+An external Session authority can publish a one-way list hint separately from the read-only runtime facts used by model and capability discovery.
+
+```ts type-equiv
+/** One-way list hint for a conversation whose transcript remains externally owned. */
+interface SessionAuthorityListMetadata {
+  /** The authority has confirmed this is a conversation, even before local history is projected. */
+  readonly nonBlank: true
+}
+```
+
+```ts type-equiv
+/** Read-only facts an external authority can expose without acquiring a live Agent. */
+interface SessionAuthorityDescription {
+  /** Known writer model; absent while discovery has not acquired a writer yet. */
+  readonly current?: ModelSelection
+  /** Whether ordinary text may acquire the writer and execute externally. */
+  readonly routable: boolean
+  /** Operations admitted before resolving a live Agent. */
+  readonly capabilities: SessionCapabilities
 }
 ```
 
@@ -178,6 +202,25 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Optional per-Session authority bridge; unowned identities are no-ops.
 
 ```ts cordis-catalog
+/** Refresh externally-owned Session rows before the stock session.list snapshot. */
+refreshCatalog?(): Promise<void>
+
+/**
+ * Read the last successfully refreshed catalog hint without I/O.
+ * The hint is deliberately one-way: an authority may make a conversation
+ * visible, but may not hide a locally non-blank Session.
+ * @param sessionId - exact DSH Session identity whose catalog metadata is requested.
+ * @returns the current visibility hint, or `undefined` for an unowned Session.
+ */
+listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined
+
+/**
+ * Describe an externally-owned Session without refreshing or acquiring it.
+ * @param sessionId - exact DSH Session identity whose runtime facts are requested.
+ * @returns authoritative read-only facts, or `undefined` for an unowned Session.
+ */
+describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>
+
 /**
  * Reconcile an externally-owned Session before a cold or idle access.
  * @param sessionId - exact DSH Session identity whose binding is authoritative.
@@ -196,7 +239,7 @@ rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | u
 
 Types: [SessionId](core.md)
 
-Source: [`packages/host/apiproxy/src/index.ts:51`](../../packages/host/apiproxy/src/index.ts)
+Source: [`packages/host/apiproxy/src/index.ts:71`](../../packages/host/apiproxy/src/index.ts)
 
 <a id="ctxsessiontitle--sessiontitleservice"></a>
 

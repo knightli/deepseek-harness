@@ -1036,6 +1036,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Optional per-Session authority bridge; unowned identities are no-ops.',
     methods: [
       {
+        signature: 'refreshCatalog?(): Promise<void>',
+        description: 'Refresh externally-owned Session rows before the stock session.list snapshot.',
+        parameters: [],
+      },
+      {
+        signature: 'listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined',
+        description: 'Read the last successfully refreshed catalog hint without I/O. The hint is deliberately one-way: an authority may make a conversation visible, but may not hide a locally non-blank Session.',
+        parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose catalog metadata is requested.' }],
+        returns: 'the current visibility hint, or `undefined` for an unowned Session.',
+      },
+      {
+        signature: 'describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>',
+        description: 'Describe an externally-owned Session without refreshing or acquiring it.',
+        parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose runtime facts are requested.' }],
+        returns: 'authoritative read-only facts, or `undefined` for an unowned Session.',
+      },
+      {
         signature: 'refresh(sessionId: SessionId): Promise<void>',
         description: 'Reconcile an externally-owned Session before a cold or idle access.',
         parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose binding is authoritative.' }],
@@ -2175,6 +2192,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Create or reuse a workspace for an existing directory. The path is canonicalized through `fs.realpath`; a nonexistent path rejects with the original error and a non-directory rejects. Repeated calls for the same canonical path return the existing entity without changing its title. A newly created workspace is prepended to the durable registry order. Different canonical paths may share a display title.',
         parameters: [{ name: 'path', description: 'Existing directory to own, in any path spelling.' }, { name: 'title', description: 'Display title used only when a new record is created.' }],
         returns: 'the existing or newly durable workspace.',
+      },
+      {
+        signature: 'async projectExternalSession(sessionId: SessionId, projectPath: string): Promise<Workspace>',
+        description: 'Project an existing Session into an externally authoritative Project. The immutable Session header remains untouched; only workspace membership changes. Callers must re-register the projection after each Host restart.',
+        parameters: [{ name: 'sessionId', description: 'Existing live or persisted Session identity.' }, { name: 'projectPath', description: 'Existing Project directory selected by the authority.' }],
+        returns: 'the Project workspace that now owns the Session row.',
       },
       {
         signature: 'get(id: WorkspaceId): Workspace | undefined',
@@ -3795,12 +3818,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionAppendEventType = Exclude<SessionEventType, \'session/history-insert\'>;',
   },
   {
+    name: 'SessionAuthorityDescription',
+    declaration: 'export interface SessionAuthorityDescription {\n    readonly current?: ModelSelection;\n    readonly routable: boolean;\n    readonly capabilities: SessionCapabilities;\n}',
+  },
+  {
+    name: 'SessionAuthorityListMetadata',
+    declaration: 'export interface SessionAuthorityListMetadata {\n    readonly nonBlank: true;\n}',
+  },
+  {
     name: 'SessionAuthorityRename',
-    declaration: 'export interface SessionAuthorityRename {\n    readonly title: string;\n    readonly authority: SessionTitleAuthorityId;\n}',
+    declaration: 'export interface SessionAuthorityRename {\n    readonly title: string;\n    readonly authority: SessionTitleAuthorityId;\n    readonly seq?: number;\n}',
   },
   {
     name: 'SessionAvailability',
     declaration: 'export type SessionAvailability = \'live\' | \'persisted\';',
+  },
+  {
+    name: 'SessionCapabilities',
+    declaration: 'export interface SessionCapabilities {\n    imageInput: boolean;\n    modelSelection: boolean;\n    fork: boolean;\n}',
   },
   {
     name: 'SessionEvent',

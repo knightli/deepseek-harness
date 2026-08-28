@@ -612,6 +612,16 @@
     },
     {
       "doc": "docs/subsystems/session-title.md",
+      "symbol": "SessionAuthorityDescription",
+      "source": "packages/host/apiproxy/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/session-title.md",
+      "symbol": "SessionAuthorityListMetadata",
+      "source": "packages/host/apiproxy/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/session-title.md",
       "symbol": "SessionAuthorityRename",
       "source": "packages/host/apiproxy/src/index.ts"
     },

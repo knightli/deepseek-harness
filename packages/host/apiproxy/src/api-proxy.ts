@@ -528,6 +528,11 @@ function sessionBlank(session: Session): boolean {
   return !session.events.some(event => event.type === 'turn/start')
 }
 
+/** External catalogs may prove a conversation exists before its transcript is projected locally. */
+function authorityConfirmsNonBlank(ctx: Context, sessionId: SessionId): boolean {
+  return ctx.get('sessionAuthority')?.listMetadata?.(sessionId)?.nonBlank === true
+}
+
 /** Advance the Session-list hint projection by one committed event. */
 function applySessionListMetadata(state: SessionListMetadata, event: SessionEvent): SessionListMetadata {
   const blank = state.blank && event.type !== 'turn/start'
@@ -571,13 +576,13 @@ function sessionListFields(header: SessionHeader, events: readonly SessionEvent[
 }
 
 /** SessionSummary projection for attached (in-memory) sessions. */
-function summarize(session: Session, running: boolean): SessionSummary {
+function summarize(ctx: Context, session: Session, running: boolean): SessionSummary {
   const metadata = sessionListMetadata(session.events)
   return {
     sessionId: session.id,
     updatedAt: sessionListUpdatedAt(session.header, metadata),
     running,
-    blank: metadata.blank,
+    blank: authorityConfirmsNonBlank(ctx, session.id) ? false : metadata.blank,
     ...sessionListFields(session.header, session.events),
   }
 }
@@ -629,14 +634,15 @@ async function summarizeCold(
   blankProbeMaxBytes: number,
   signal?: AbortSignal,
 ): Promise<SessionSummary> {
-  const probed = metadata?.blank === false
+  const externallyNonBlank = authorityConfirmsNonBlank(ctx, meta.id)
+  const probed = externallyNonBlank || metadata?.blank === false
     ? undefined
     : await probeColdSessionMetadata(ctx, persistence, meta, blankProbeMaxBytes, signal)
   return {
     sessionId: meta.id,
     updatedAt: sessionListUpdatedAt(meta, probed ?? metadata),
     running: false,
-    blank: metadata?.blank === false ? false : probed?.blank ?? false,
+    blank: externallyNonBlank || metadata?.blank === false ? false : probed?.blank ?? false,
     // Header-only: reading the log for a blank-window preset switch would
     // defeat the same index read, and attaching the session replaces this row
     // with `summarize()`, which resolves the switch from the events.
@@ -1892,7 +1898,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       const agent = ctx.agents.get(session.id)
       const projections = listProjectionsFor(ctx, session.header, session)
       return {
-        ...summarize(session, agent?.status === 'running'),
+        ...summarize(ctx, session, agent?.status === 'running'),
         ...projections === undefined ? {} : { projections },
       }
     }

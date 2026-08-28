@@ -82,4 +82,18 @@ describe('summary blank = conversation not started', () => {
     session.append('turn/start', { turn: 0 })
     expect(await listBlank(api, session.id)).toBe(false)
   })
+
+  it('keeps an externally confirmed conversation visible before lazy history projection', async () => {
+    const { ctx, api, attach } = await harness()
+    const session = ctx.sessions.create()
+    attach(session)
+    ctx.provide('sessionAuthority', {
+      refresh: () => Promise.resolve(),
+      refreshCatalog: () => Promise.resolve(),
+      listMetadata: sessionId => sessionId === session.id ? { nonBlank: true } : undefined,
+    })
+
+    expect(session.events.some(event => event.type === 'turn/start')).toBe(false)
+    expect(await listBlank(api, session.id)).toBe(false)
+  })
 })
