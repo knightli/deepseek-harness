@@ -48,6 +48,7 @@ class FakeWebSocket extends EventTarget {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   delete (globalThis as Win).location
   sockets.length = 0
   if (originalWebSocket === undefined) delete (globalThis as WebSocketGlobal).WebSocket
@@ -184,8 +185,13 @@ describe('connection client apply', () => {
     }
   })
 
-  it('WebApiClient keeps unary calls and respond on globalThis.fetch', async () => {
+  it('WebApiClient keeps unary calls and respond on insecure origins', async () => {
     ;(globalThis as Win).location = { hostname: 'localhost', search: '' }
+    vi.stubGlobal('crypto', {
+      getRandomValues(bytes: Uint8Array) {
+        return bytes.fill(0)
+      },
+    })
     const handle = await mount()
     const original = globalThis.fetch
     const seen: string[] = []
@@ -204,8 +210,23 @@ describe('connection client apply', () => {
     } finally {
       globalThis.fetch = original
     }
+    expect(typeof globalThis.crypto.randomUUID).toBe('function')
     expect(seen.some(u => u.includes('/api/host.describe'))).toBe(true)
     expect(seen.some(u => u.includes('/api/respond'))).toBe(true)
+  })
+
+  it('preserves a native randomUUID implementation', async () => {
+    ;(globalThis as Win).location = { hostname: 'localhost', search: '' }
+    const nativeRandomUuid = vi.fn<Crypto['randomUUID']>(
+      () => '12345678-1234-4234-8234-123456789abc',
+    )
+    vi.stubGlobal('crypto', {
+      getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto),
+      randomUUID: nativeRandomUuid,
+    })
+    await mount()
+    expect(globalThis.crypto.randomUUID()).toBe('12345678-1234-4234-8234-123456789abc')
+    expect(nativeRandomUuid).toHaveBeenCalledOnce()
   })
 
   it('opens one WebSocket per downlink, parses frames, and aborts both without using fetch', async () => {

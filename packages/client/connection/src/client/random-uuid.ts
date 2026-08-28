@@ -12,3 +12,16 @@ export function randomUuid(): string {
   const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
+
+/**
+ * Install the UUID method required by browser-loaded Harness packages.
+ * @returns nothing after preserving or installing the method.
+ */
+export function installRandomUuid(): void {
+  if (typeof globalThis.crypto.randomUUID === 'function') return
+  Object.defineProperty(globalThis.crypto, 'randomUUID', {
+    configurable: true,
+    writable: true,
+    value: randomUuid,
+  })
+}
