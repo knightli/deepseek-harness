@@ -3196,11 +3196,20 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     },
 
     workspace: {
-      list(request) {
-        return Promise.resolve(ok(request, {
-          items: ctx.workspaceRegistry.list().map(workspaceView),
-          archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds],
-        }))
+      async list(request) {
+        try {
+          await ctx.get('sessionAuthority')?.refreshCatalog?.()
+          return ok(request, {
+            items: ctx.workspaceRegistry.list().map(workspaceView),
+            archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds],
+          })
+        } catch {
+          return err(request, {
+            code: 'internal',
+            message: 'external Session catalog refresh failed',
+            details: {},
+          })
+        }
       },
 
       async create(request) {

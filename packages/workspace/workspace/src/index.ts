@@ -98,12 +98,14 @@ export class WorkspaceRegistry extends Service {
   private readonly entities = new Map<WorkspaceId, WorkspaceEntity>()
   private readonly headers = new Map<SessionId, SessionHeader>()
   private readonly sessionPaths = new Map<SessionId, string>()
+  private readonly projectedSessionPaths = new Map<SessionId, string>()
   private readonly invalidSessionPaths = new Map<SessionId, string>()
   private operationTail: Promise<void> = Promise.resolve()
 
   private readonly host: WorkspaceEntityHost = {
     table: () => this.requireTable(),
-    sessionPath: id => this.sessionPaths.get(id),
+    sessionPath: id => this.projectedSessionPaths.get(id) ?? this.sessionPaths.get(id),
+    isProjectedSessionPath: (id, path) => this.projectedSessionPaths.get(id) === path,
     readSessionHeader: id => this.readSessionHeader(id),
     rememberSessionPath: (id, path) => {
       this.sessionPaths.set(id, path)
@@ -161,6 +163,47 @@ export class WorkspaceRegistry extends Service {
       throw new Error(`cannot create a workspace at '${canonical}': path is not a directory`)
     }
     return await this.enqueueOperation(() => this.createCanonical(canonical, title))
+  }
+
+  /**
+   * Project an existing Session into an externally authoritative Project.
+   * The immutable Session header remains untouched; only workspace membership
+   * changes. Callers must re-register the projection after each Host restart.
+   * @param sessionId - Existing live or persisted Session identity.
+   * @param projectPath - Existing Project directory selected by the authority.
+   * @returns the Project workspace that now owns the Session row.
+   */
+  async projectExternalSession(sessionId: SessionId, projectPath: string): Promise<Workspace> {
+    const project = await realpathNormalize(projectPath)
+    if (!(await stat(project)).isDirectory()) {
+      throw new Error(`cannot project a session at '${project}': path is not a directory`)
+    }
+    return this.enqueueOperation(async () => {
+      const header = await this.readSessionHeader(sessionId)
+      if (header.cwd === undefined) {
+        throw new Error(`cannot project session '${sessionId}': its stored header carries no cwd`)
+      }
+      const executionPath = await realpathNormalize(header.cwd)
+      if (!(await stat(executionPath)).isDirectory()) {
+        throw new Error(`cannot project session '${sessionId}': its cwd is not a directory`)
+      }
+
+      const target = await this.createCanonical(project)
+      const previous = this.projectedSessionPaths.get(sessionId)
+      this.projectedSessionPaths.set(sessionId, project)
+      try {
+        for (const workspace of this.entities.values()) {
+          if (workspace.id === target.id || !workspace.accountsSession(sessionId)) continue
+          await workspace.detachSession(sessionId)
+        }
+        await target.attachSession(sessionId)
+      } catch (error) {
+        if (previous === undefined) this.projectedSessionPaths.delete(sessionId)
+        else this.projectedSessionPaths.set(sessionId, previous)
+        throw error
+      }
+      return target
+    })
   }
 
   /**

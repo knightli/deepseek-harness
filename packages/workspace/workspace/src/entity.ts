@@ -46,6 +46,9 @@ export interface WorkspaceEntityHost {
    */
   sessionPath(id: SessionId): string | undefined
 
+  /** Whether an external authority explicitly projected this session here. */
+  isProjectedSessionPath(id: SessionId, path: string): boolean
+
   /**
    * Read one stored session header for attach validation.
    * @param id - The session whose header to read.
@@ -111,7 +114,8 @@ export class WorkspaceEntity implements Workspace {
     // id: the cwd fact was checked when it first attached and both inputs
     // (stored header cwd, workspace path) are immutable. Membership itself is
     // decided on the write chain inside `mutate`, never on this snapshot.
-    if (!this.record.sessionIds.includes(sessionId)) {
+    if (!this.record.sessionIds.includes(sessionId)
+      && !this.host.isProjectedSessionPath(sessionId, this.record.path)) {
       const header = await this.host.readSessionHeader(sessionId)
       if (header.cwd === undefined) {
         throw new Error(
@@ -146,6 +150,11 @@ export class WorkspaceEntity implements Workspace {
     await this.mutate(record => record.sessionIds.includes(sessionId)
       ? record
       : { ...record, sessionIds: [sessionId, ...record.sessionIds] })
+  }
+
+  /** Registry-only durable-candidate probe used while moving an external projection. */
+  accountsSession(sessionId: SessionId): boolean {
+    return this.record.sessionIds.includes(sessionId)
   }
 
   async insertSessionBefore(sessionId: SessionId, beforeSessionId?: SessionId): Promise<void> {

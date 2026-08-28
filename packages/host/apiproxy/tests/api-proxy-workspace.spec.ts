@@ -260,6 +260,23 @@ describe('host.openPath', () => {
 })
 
 describe('workspace.create', () => {
+  it('refreshes an external Session catalog before taking the workspace baseline', async () => {
+    const { api, ctx, root } = await harness()
+    const target = stageDir(root, 'external-project')
+    const refreshCatalog = vi.fn(async () => {
+      await ctx.workspaceRegistry.create(target)
+    })
+    ctx.provide('sessionAuthority', {
+      refresh: () => Promise.resolve(),
+      refreshCatalog,
+    })
+
+    const listed = expectOk(await api.workspace.list(request({})))
+
+    expect(refreshCatalog).toHaveBeenCalledOnce()
+    expect(listed.items.map(item => item.path)).toEqual([target])
+  })
+
   it('serializes concurrent creates of one path into a single registration', async () => {
     const { api, root } = await harness()
     const target = stageDir(root, 'alpha')

@@ -616,6 +616,25 @@ describe('Workspace registry ordering', () => {
 })
 
 describe('Workspace session ordering', () => {
+  it('projects an existing session into an external Project without changing its header cwd', async () => {
+    const executionDir = await makeDir('external-execution')
+    const projectDir = await makeDir('external-project')
+    const result = await harness({ sessions: [header('external', executionDir)] })
+    const executionWorkspace = await result.registry.create(executionDir)
+    await executionWorkspace.attachSession(SessionId('external'))
+
+    const projectWorkspace = await result.registry.projectExternalSession(
+      SessionId('external'),
+      projectDir,
+    )
+
+    expect(projectWorkspace.sessionIds).toEqual(['external'])
+    expect(executionWorkspace.sessionIds).toEqual([])
+    expect(storedRecord(result.pool, projectWorkspace.id).sessionIds).toEqual(['external'])
+    expect(storedRecord(result.pool, executionWorkspace.id).sessionIds).toEqual([])
+    expect(result.list).toHaveBeenCalledTimes(1)
+  })
+
   it('prepends new attaches and keeps repeat attach idempotent', async () => {
     const dir = await makeDir('attach-order')
     const result = await harness()
