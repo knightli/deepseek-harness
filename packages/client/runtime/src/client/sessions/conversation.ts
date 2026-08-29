@@ -47,7 +47,7 @@ export type AssistantBlock =
   | { kind: 'reasoning'; text: string }
   | { kind: 'image'; attachment: ImageAttachmentRef }
   | { kind: 'tool-call'; callId: string; name: string; argsRaw: string }
-  | { kind: 'other'; block: unknown }
+  | { kind: 'other'; blockType?: string; block: unknown }
 
 /**
  * core ContentBlock[] -> AssistantBlock[] (classifier shared by finalized messages and partial block-end).
@@ -69,7 +69,7 @@ export function toAssistantBlock(block: ContentBlock): AssistantBlock {
     case 'reasoning': return { kind: 'reasoning', text: block.text }
     case 'image': return { kind: 'image', attachment: block.attachment }
     case 'tool-call': return { kind: 'tool-call', callId: String(block.id), name: block.name, argsRaw: block.arguments }
-    default: return { kind: 'other', block }
+    default: return { kind: 'other', blockType: block.type, block }
   }
 }
 

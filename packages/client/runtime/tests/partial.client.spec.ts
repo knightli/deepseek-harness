@@ -20,7 +20,7 @@ describe('PartialAccumulator', () => {
       { kind: 'text', text: '' },
       { kind: 'reasoning', text: '' },
       { kind: 'tool-call', callId: '', name: '', argsRaw: '' },
-      { kind: 'other', block: null },
+      { kind: 'other', blockType: 'no-such', block: null },
     ])
   })
 

@@ -42,6 +42,29 @@ describe('tails', () => {
     expect(stopped.getByText('已停止')).toBeTruthy()
   })
 
+  it('AssistantMarkdown offers a typed unknown block to the additive keyed seat', () => {
+    const calls: Array<{ key: string; owner: unknown; entryKey: unknown }> = []
+    const renderSlot = ((key: string, owner: unknown, options?: { entryKey?: unknown }) => {
+      calls.push({ key, owner, entryKey: options?.entryKey })
+      return <span>specialized block</span>
+    }) as NonNullable<AssistantMarkdownProps['renderSlot']>
+    const block = { type: 'synthetic.extra', value: 42 }
+    const view = render(
+      <AssistantMarkdown
+        t={t}
+        blocks={[{ kind: 'other', blockType: 'synthetic.extra', block }]}
+        streaming
+        renderSlot={renderSlot}
+      />,
+    )
+    expect(view.getByText('specialized block')).toBeTruthy()
+    expect(calls).toEqual([{
+      key: 'conversation.chat.assistant-block',
+      owner: { blockType: 'synthetic.extra', block, streaming: true },
+      entryKey: 'synthetic.extra',
+    }])
+  })
+
   it('AssistantMarkdown skips the root shell when only tool-call heads remain', () => {
     // Tool heads are drawn by ChatView's tool groups; an empty root between
     // groups is layout noise (no text, no pulse, no interrupted marker).

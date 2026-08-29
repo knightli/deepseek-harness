@@ -84,6 +84,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       inject: ChatNodeTurnDataInjected
     }
     /**
+     * Additive keyed renderer for an assistant ContentBlock not handled by the
+     * stock text, reasoning, image, or tool-call branches. The fallback stays
+     * the stock JsonBlock, so an absent or failing registration preserves raw
+     * facts instead of taking over the assistant-step renderer.
+     */
+    'conversation.chat.assistant-block': {
+      kind: 'keyed'
+      scope: 'session'
+      owner: AssistantBlockOwnerProps
+    }
+    /**
      * The chat view's per-command row hole: keyed dispatch on the command
      * name (`command/run.name`; a run-less cross-window node has none and
      * always lands on the fallback). Declared by the chat view entry; the
@@ -339,6 +350,19 @@ export interface AssistantActionOwnerProps {
   /** Stable identity carried from the `assistant/message` event. */
   messageId: MessageId
 }
+
+/** Frozen unknown assistant block supplied to one additive keyed renderer. */
+export interface AssistantBlockOwnerProps {
+  /** Wire ContentBlock discriminant, retained during the block-start shell. */
+  readonly blockType: string
+  /** Full durable block after block-end; null only for a streaming shell. */
+  readonly block: unknown
+  /** Whether the owning assistant step is still streaming. */
+  readonly streaming: boolean
+}
+
+/** Full props of one registered additive assistant-block renderer. */
+export type AssistantBlockViewProps = PropsRuntime<'conversation.chat.assistant-block'>
 
 /** Hook constrained to business data published on the current Chat Node's Turn. */
 export type UseChatNodeTurnData = <Key extends Extract<keyof ConversationTurnDataMap, string>>(

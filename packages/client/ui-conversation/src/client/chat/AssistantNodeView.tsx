@@ -1,11 +1,15 @@
 import { memo, useMemo } from 'react'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatNodeViewProps, TurnTailOwnerProps } from '../contract/slots.ts'
 import { AssistantMarkdown } from './AssistantMarkdown.tsx'
 
+type AssistantNodeViewProps = ChatNodeViewProps<'assistant-step'>
+  & Partial<PropsRenderSlots<'conversation.chat.assistant-block'>>
+
 /** Streaming, settled, and interrupted Assistant states share one keyed renderer instance. */
 export const AssistantNodeView = memo(function AssistantNodeView({
-  node, useTurnData, openFile, loadImage, fileMentions, t,
-}: ChatNodeViewProps<'assistant-step'>) {
+  node, useTurnData, openFile, loadImage, fileMentions, t, renderSlot,
+}: AssistantNodeViewProps) {
   const data = node.data
   const turn = node.location.kind === 'turn' || node.location.kind === 'step'
     ? node.location.turn
@@ -28,6 +32,7 @@ export const AssistantNodeView = memo(function AssistantNodeView({
       loadImage={loadImage}
       mentions={mentions}
       t={t}
+      {...renderSlot === undefined ? {} : { renderSlot }}
     />
   )
 })
