@@ -50,6 +50,13 @@ function scriptedApi(overrides: {
         groups: [],
         failures: [],
       }),
+      activate: r => ok(r, {
+        current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+        routable: true,
+        capabilities: { imageInput: true, modelSelection: true, fork: true },
+        groups: [],
+        failures: [],
+      }),
       selectModel: r => ok(r, {
         selected: { provider: r.payload.provider, model: r.payload.model },
       }),

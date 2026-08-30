@@ -67,6 +67,11 @@ export interface SessionAuthorityListMetadata {
   readonly nonBlank: true
 }
 
+/** Result of an explicit attempt to make an externally-owned Session interactive. */
+export type SessionAuthorityActivation =
+  | { readonly status: 'acquired'; readonly models: SessionModels }
+  | { readonly status: 'busy' }
+
 /** Optional per-Session authority bridge; unowned identities are no-ops. */
 export interface SessionAuthority {
   /** Refresh externally-owned Session rows before the stock session.list snapshot. */
@@ -85,9 +90,24 @@ export interface SessionAuthority {
    * @returns authoritative read-only facts, or `undefined` for an unowned Session.
    */
   describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>
-  /** Return a complete advisory directory for an externally-owned Session. */
+  /**
+   * Return a complete advisory directory for an externally-owned Session.
+   * @param sessionId - exact externally-owned Session identity.
+   * @returns The directory, or undefined when this authority does not own the Session.
+   */
   models?(sessionId: SessionId): Promise<SessionModels | undefined>
-  /** Mutate the next-turn selection for an externally-owned Session. */
+  /**
+   * Acquire the external writer after explicit user intent.
+   * @param sessionId - exact externally-owned Session identity.
+   * @returns Acquisition outcome, or undefined when this authority does not own the Session.
+   */
+  activate?(sessionId: SessionId): Promise<SessionAuthorityActivation | undefined>
+  /**
+   * Mutate the next-turn selection for an externally-owned Session.
+   * @param sessionId - exact externally-owned Session identity.
+   * @param selection - complete provider, model, and optional reasoning route.
+   * @returns Accepted selection, or undefined when this authority does not own the Session.
+   */
   selectModel?(
     sessionId: SessionId,
     selection: ModelSelection,

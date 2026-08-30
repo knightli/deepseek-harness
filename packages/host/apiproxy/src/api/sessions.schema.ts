@@ -255,12 +255,21 @@ export const sessionCapabilitiesSchema = z.object({
 
 /** session.models response value. */
 export const sessionModelsValueSchema = z.object({
-  current: modelSelectionSchema,
+  current: modelSelectionSchema.nullable(),
   routable: z.boolean(),
   capabilities: sessionCapabilitiesSchema,
   groups: z.array(modelProviderGroupSchema),
   failures: z.array(modelCatalogFailureSchema),
 }) satisfies z.ZodType<Wire<ResponseValue<'session.models'>>>
+
+/** session.activate request payload. */
+export const sessionActivateRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+}) satisfies z.ZodType<Wire<RequestPayload<'session.activate'>>>
+
+/** session.activate response value: the authority established by activation. */
+export const sessionActivateValueSchema = sessionModelsValueSchema satisfies
+z.ZodType<Wire<ResponseValue<'session.activate'>>>
 
 /** session.selectModel request payload. */
 export const sessionSelectModelRequestSchema = z.object({

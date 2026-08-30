@@ -160,6 +160,11 @@ export class FixtureSession implements SessionFace {
     throw new Error(`test session "${this.sessionId}": refreshModels is not stubbed`)
   }
 
+  /** Fail-loud stub; supply `activateForInput` on the fixture's session face to exercise it. */
+  activateForInput(): never {
+    throw new Error(`test session "${this.sessionId}": activateForInput is not stubbed`)
+  }
+
   /** Fail-loud stub; supply `selectModel` on the fixture's session face to exercise it. */
   selectModel(): never {
     throw new Error(`test session "${this.sessionId}": selectModel is not stubbed`)

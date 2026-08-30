@@ -376,6 +376,41 @@ describe('cold history recovery view', () => {
     expect(describeSession).not.toHaveBeenCalled()
   })
 
+  it('activates an externally-owned Session only through the explicit write-intent RPC', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const sessionId = sid('session-authority-activate')
+    const directory = {
+      current: { provider: 'codex', model: 'model-a' },
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: true, fork: false },
+      groups: [],
+      failures: [],
+    }
+    const models = vi.fn(() => Promise.resolve({
+      ...directory,
+      current: null,
+      capabilities: { ...directory.capabilities, modelSelection: false },
+    }))
+    const activate = vi.fn(() => Promise.resolve({ status: 'acquired' as const, models: directory }))
+    const refresh = vi.fn(() => Promise.reject(new Error('read-only model lookup must not refresh')))
+    ctx.provide('sessionAuthority', { refresh, models, activate })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const passive = await api.sessions.models(request({ sessionId }))
+    const activated = await api.sessions.activate(request({ sessionId }))
+
+    expect(passive.result.ok && passive.result.value.current).toBeNull()
+    expect(activated.result).toEqual({ ok: true, value: directory })
+    expect(models).toHaveBeenCalledOnce()
+    expect(activate).toHaveBeenCalledWith(sessionId)
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
   it('keeps externally-owned model discovery read-only before writer acquisition', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

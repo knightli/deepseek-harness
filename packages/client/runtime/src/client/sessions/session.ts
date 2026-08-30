@@ -335,6 +335,46 @@ export class Session implements SessionFace {
     return this.readModels()
   }
 
+  /** Activate this ordinary Session for interactive input and publish its resulting model authority. */
+  async activateForInput(): Promise<RpcResult<SessionModels>> {
+    if (this.address !== undefined || this.answerableGeneration === null) return this.modelUnavailable()
+    const generation = this.connectionGeneration
+    const requestNonce = ++this.modelRequestNonce
+    this.modelRequest = null
+    this.modelResult = undefined
+    this.modelResultGeneration = null
+    this.modelDirectorySnapshot = {
+      ...this.modelDirectorySnapshot,
+      status: 'loading',
+      error: null,
+    }
+    this.notifier.markDirty()
+    let result: RpcResult<SessionModels>
+    try {
+      result = (await this.api.sessions.activate({ sessionId: this.sessionId })).result
+    } catch (error) {
+      result = transportError(error)
+    }
+    if (!this.isCurrentModelOperation(generation, requestNonce)) return result
+    this.modelDirectorySnapshot = result.ok
+      ? {
+        current: result.value.current,
+        routable: result.value.routable,
+        capabilities: result.value.capabilities,
+        groups: result.value.groups,
+        failures: result.value.failures,
+        status: 'ready',
+        error: null,
+      }
+      : {
+        ...this.modelDirectorySnapshot,
+        status: 'error',
+        error: `${result.error.code}: ${result.error.message}`,
+      }
+    this.notifier.markDirty()
+    return result
+  }
+
   /** Select one complete model route and settle the shared directory projection. */
   async selectModel(selection: ModelSelection): Promise<RpcResult<{ selected: ModelSelection }>> {
     if (this.address !== undefined || this.answerableGeneration === null) return this.modelUnavailable()

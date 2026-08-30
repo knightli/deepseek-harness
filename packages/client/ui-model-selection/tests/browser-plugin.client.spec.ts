@@ -57,7 +57,7 @@ const GROUPS = [{
 /** Boot the plugin over fake faces + a stateful fake host (current moves on selectModel). */
 async function bench() {
   const ctx = new Context()
-  let current: ModelSelection = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+  let current: ModelSelection | null = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
   const calls = { models: 0, select: 0 }
   let failNextModels = false
   const api = { sessions: {
@@ -179,7 +179,7 @@ async function bench() {
     contribution: () => contribution!,
     seat: () => seats.get('conversation.input.model')!,
     hostCurrent: () => current,
-    setHostCurrent: (selection: ModelSelection) => { current = selection },
+    setHostCurrent: (selection: ModelSelection | null) => { current = selection },
     failNextModels: () => { failNextModels = true },
     reconnect: (id: SessionId, generation: number) => {
       const scope = scopes.get(id)
@@ -212,6 +212,21 @@ describe('ui-model-selection dual entry', () => {
     expect(options.map((o: SelectOption) => o.label)).toEqual(['DeepSeek-V4-Flash', 'DeepSeek-V4-Pro'])
     expect(options[0]).toMatchObject({ active: true, detail: 'DeepSeek' })
     expect(options[1]?.active).toBeUndefined()
+  })
+
+  it('lists selectable models without an active row when the Host has no current selection', async () => {
+    const b = await bench()
+    b.setHostCurrent(null)
+    b.mint('s1')
+
+    const options = await b.contribution().ui.options(projection('s1'), new AbortController().signal)
+
+    expect(options.map((option: SelectOption) => option.label)).toEqual([
+      'DeepSeek-V4-Flash',
+      'DeepSeek-V4-Pro',
+    ])
+    expect(options.every((option: SelectOption) => option.active === undefined)).toBe(true)
+    expect(b.seat().inject!(sid('s1')).hooks.directory.getSnapshot().current).toBeNull()
   })
 
   it('a seat selection is the current the popup marks active next — one shared state', async () => {

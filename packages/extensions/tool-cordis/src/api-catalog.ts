@@ -1053,6 +1053,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'authoritative read-only facts, or `undefined` for an unowned Session.',
       },
       {
+        signature: 'models?(sessionId: SessionId): Promise<SessionModels | undefined>',
+        description: 'Return a complete advisory directory for an externally-owned Session.',
+        parameters: [{ name: 'sessionId', description: 'exact externally-owned Session identity.' }],
+        returns: 'The directory, or undefined when this authority does not own the Session.',
+      },
+      {
+        signature: 'activate?(sessionId: SessionId): Promise<SessionAuthorityActivation | undefined>',
+        description: 'Acquire the external writer after explicit user intent.',
+        parameters: [{ name: 'sessionId', description: 'exact externally-owned Session identity.' }],
+        returns: 'Acquisition outcome, or undefined when this authority does not own the Session.',
+      },
+      {
+        signature: 'selectModel?( sessionId: SessionId, selection: ModelSelection, ): Promise<ModelSelection | undefined>',
+        description: 'Mutate the next-turn selection for an externally-owned Session.',
+        parameters: [{ name: 'sessionId', description: 'exact externally-owned Session identity.' }, { name: 'selection', description: 'complete provider, model, and optional reasoning route.' }],
+        returns: 'Accepted selection, or undefined when this authority does not own the Session.',
+      },
+      {
         signature: 'refresh(sessionId: SessionId): Promise<void>',
         description: 'Reconcile an externally-owned Session before a cold or idle access.',
         parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose binding is authoritative.' }],
@@ -3546,6 +3564,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    plugin: {\n        kind: \'plugin\';\n        plugin: string;\n    } & ContextFormed;\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n}',
   },
   {
+    name: 'ModelCatalogFailure',
+    declaration: 'export interface ModelCatalogFailure {\n    id: string;\n    name: string;\n    message: string;\n}',
+  },
+  {
+    name: 'ModelCatalogModel',
+    declaration: 'export interface ModelCatalogModel {\n    id: string;\n    name: string;\n    description?: string;\n    reasoning?: ModelReasoning;\n}',
+  },
+  {
     name: 'ModelMessageSource',
     declaration: 'export interface ModelMessageSource extends AssistantProvenance {\n    kind: \'model\';\n}',
   },
@@ -3556,6 +3582,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ModelModalityMap',
     declaration: 'export interface ModelModalityMap {\n    text: \'text\';\n    image: \'image\';\n}',
+  },
+  {
+    name: 'ModelProviderGroup',
+    declaration: 'export interface ModelProviderGroup {\n    id: string;\n    name: string;\n    models: ModelCatalogModel[];\n}',
+  },
+  {
+    name: 'ModelReasoning',
+    declaration: 'export interface ModelReasoning {\n    efforts: ModelReasoningEffort[];\n    defaultEffort?: string;\n}',
+  },
+  {
+    name: 'ModelReasoningEffort',
+    declaration: 'export interface ModelReasoningEffort {\n    id: string;\n    name: string;\n    description?: string;\n}',
   },
   {
     name: 'ObjectJsonSchema',
@@ -3818,6 +3856,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionAppendEventType = Exclude<SessionEventType, \'session/history-insert\'>;',
   },
   {
+    name: 'SessionAuthorityActivation',
+    declaration: 'export type SessionAuthorityActivation = {\n    readonly status: \'acquired\';\n    readonly models: SessionModels;\n} | {\n    readonly status: \'busy\';\n};',
+  },
+  {
     name: 'SessionAuthorityDescription',
     declaration: 'export interface SessionAuthorityDescription {\n    readonly current?: ModelSelection;\n    readonly routable: boolean;\n    readonly capabilities: SessionCapabilities;\n}',
   },
@@ -3952,6 +3994,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionLogSnapshot',
     declaration: 'export interface SessionLogSnapshot {\n    session: SessionHeader;\n    events: SessionEvent[];\n}',
+  },
+  {
+    name: 'SessionModels',
+    declaration: 'export interface SessionModels {\n    current: ModelSelection | null;\n    routable: boolean;\n    capabilities: SessionCapabilities;\n    groups: ModelProviderGroup[];\n    failures: ModelCatalogFailure[];\n}',
   },
   {
     name: 'SessionPersistenceRevision',

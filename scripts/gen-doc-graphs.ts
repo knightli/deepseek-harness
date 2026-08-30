@@ -254,6 +254,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns the deterministic fallback, latest-title fold, and sole optional asynchronous provider registration.',
   },
   {
+    key: 'sessionAuthority',
+    pkg: 'apiproxy',
+    title: 'External session authority seam',
+    mode: 'seam',
+    consumers: ['apiproxy'],
+    note: 'Deployments may project externally-owned sessions, keep passive reads writer-free, and acquire interactive authority only through an explicit activation request.',
+  },
+  {
     key: 'systemPrompt',
     pkg: 'system-prompt',
     title: 'System prompt assembly registry',

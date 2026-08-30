@@ -2542,6 +2542,47 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         })
       },
 
+      async activate(request) {
+        const { sessionId } = request.payload
+        try {
+          const external = await ctx.get('sessionAuthority')?.activate?.(sessionId)
+          if (external?.status === 'acquired') return ok(request, external.models)
+          if (external?.status === 'busy') {
+            return err(request, {
+              code: 'thread-busy',
+              message: 'This session is already open in another application.',
+              details: { sessionId },
+            })
+          }
+        } catch {
+          return err(request, {
+            code: 'internal',
+            message: 'external Session activation failed',
+            details: {},
+          })
+        }
+        const described = await describeExternalSession(sessionId)
+        if ('error' in described) return err(request, described.error)
+        if (described.description !== undefined) {
+          return err(request, {
+            code: 'internal',
+            message: 'external Session activation is unavailable',
+            details: {},
+          })
+        }
+        const found = await agentFor(sessionId)
+        if ('error' in found) return err(request, found.error)
+        const current = selectionFor(found.agent).current
+        const { groups, failures } = await buildModelCatalog(ctx)
+        return ok(request, {
+          current: { ...current },
+          routable: textPromptRoutable(found.agent, current.provider),
+          capabilities: sessionCapabilities(found.agent),
+          groups,
+          failures,
+        })
+      },
+
       async selectModel(request) {
         const { sessionId, provider, model, reasoningEffort } = request.payload
         const requested: ModelSelection = {

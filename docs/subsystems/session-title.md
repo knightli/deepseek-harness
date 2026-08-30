@@ -222,6 +222,28 @@ listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined
 describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>
 
 /**
+ * Return a complete advisory directory for an externally-owned Session.
+ * @param sessionId - exact externally-owned Session identity.
+ * @returns The directory, or undefined when this authority does not own the Session.
+ */
+models?(sessionId: SessionId): Promise<SessionModels | undefined>
+
+/**
+ * Acquire the external writer after explicit user intent.
+ * @param sessionId - exact externally-owned Session identity.
+ * @returns Acquisition outcome, or undefined when this authority does not own the Session.
+ */
+activate?(sessionId: SessionId): Promise<SessionAuthorityActivation | undefined>
+
+/**
+ * Mutate the next-turn selection for an externally-owned Session.
+ * @param sessionId - exact externally-owned Session identity.
+ * @param selection - complete provider, model, and optional reasoning route.
+ * @returns Accepted selection, or undefined when this authority does not own the Session.
+ */
+selectModel?( sessionId: SessionId, selection: ModelSelection, ): Promise<ModelSelection | undefined>
+
+/**
  * Reconcile an externally-owned Session before a cold or idle access.
  * @param sessionId - exact DSH Session identity whose binding is authoritative.
  * @returns when the same Session has been refreshed or is not externally owned.
@@ -237,9 +259,9 @@ refresh(sessionId: SessionId): Promise<void>
 rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | undefined>
 ```
 
-Types: [SessionId](core.md)
+Types: [ModelSelection](core.md) · [SessionId](core.md)
 
-Source: [`packages/host/apiproxy/src/index.ts:71`](../../packages/host/apiproxy/src/index.ts)
+Source: [`packages/host/apiproxy/src/index.ts:76`](../../packages/host/apiproxy/src/index.ts)
 
 <a id="ctxsessiontitle--sessiontitleservice"></a>
 

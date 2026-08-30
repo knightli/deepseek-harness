@@ -415,7 +415,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AssistantBlock',
-    declaration: 'export type AssistantBlock = {\n    kind: \'text\';\n    text: string;\n} | {\n    kind: \'reasoning\';\n    text: string;\n} | {\n    kind: \'image\';\n    attachment: ImageAttachmentRef;\n} | {\n    kind: \'tool-call\';\n    callId: string;\n    name: string;\n    argsRaw: string;\n} | {\n    kind: \'other\';\n    block: unknown;\n};',
+    declaration: 'export type AssistantBlock = {\n    kind: \'text\';\n    text: string;\n} | {\n    kind: \'reasoning\';\n    text: string;\n} | {\n    kind: \'image\';\n    attachment: ImageAttachmentRef;\n} | {\n    kind: \'tool-call\';\n    callId: string;\n    name: string;\n    argsRaw: string;\n} | {\n    kind: \'other\';\n    blockType?: string;\n    block: unknown;\n};',
   },
   {
     name: 'AssistantMessageNode',
@@ -571,7 +571,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ISession',
-    declaration: 'export interface ISession {\n    readonly sessionId: SessionId;\n    readonly projections: ProjectionsFace;\n    readonly modelDirectory: ObservableSnapshot<SessionModelDirectorySnapshot>;\n    loadModels(): Promise<RpcResult<SessionModels>>;\n    refreshModels(): Promise<RpcResult<SessionModels>>;\n    selectModel(selection: ModelSelection): Promise<RpcResult<{\n        selected: ModelSelection;\n    }>>;\n    prompt(content: PromptContentPart[], mode: \'queue\' | \'steer\'): Promise<RpcResult<{\n        accepted: true;\n    }>>;\n    readAttachment(attachmentId: AttachmentIdType): Promise<RpcResult<{\n        attachment: ImageAttachmentRef;\n        data: Uint8Array;\n    }>>;\n    updateQueue(itemId: MessageId, action: QueueAction): Promise<RpcResult<{\n        accepted: true;\n    }>>;\n    cancel(): Promise<RpcResult<{\n        accepted: true;\n    }>>;\n    rename(title: string): Promise<RpcResult<{\n        title: string;\n        seq: number;\n    }>>;\n    loadOlder(): Promise<void>;\n    command(line: string): Promise<RemoteResult<{\n        matched: boolean;\n    }>>;\n}',
+    declaration: 'export interface ISession {\n    readonly sessionId: SessionId;\n    readonly projections: ProjectionsFace;\n    readonly modelDirectory: ObservableSnapshot<SessionModelDirectorySnapshot>;\n    loadModels(): Promise<RpcResult<SessionModels>>;\n    refreshModels(): Promise<RpcResult<SessionModels>>;\n    activateForInput(): Promise<RpcResult<SessionModels>>;\n    selectModel(selection: ModelSelection): Promise<RpcResult<{\n        selected: ModelSelection;\n    }>>;\n    prompt(content: PromptContentPart[], mode: \'queue\' | \'steer\'): Promise<RpcResult<{\n        accepted: true;\n    }>>;\n    readAttachment(attachmentId: AttachmentIdType): Promise<RpcResult<{\n        attachment: ImageAttachmentRef;\n        data: Uint8Array;\n    }>>;\n    updateQueue(itemId: MessageId, action: QueueAction): Promise<RpcResult<{\n        accepted: true;\n    }>>;\n    cancel(): Promise<RpcResult<{\n        accepted: true;\n    }>>;\n    rename(title: string): Promise<RpcResult<{\n        title: string;\n        seq: number;\n    }>>;\n    loadOlder(): Promise<void>;\n    command(line: string): Promise<RemoteResult<{\n        matched: boolean;\n    }>>;\n}',
   },
   {
     name: 'KeyPropsOf',

@@ -6,7 +6,8 @@ import {
 } from '../src/api/rpc.schema.ts'
 import { z } from 'zod'
 import {
-  contentBlockSchema, sessionCancelRequestSchema, sessionCancelValueSchema, sessionCreateRequestSchema,
+  contentBlockSchema, sessionActivateRequestSchema, sessionActivateValueSchema,
+  sessionCancelRequestSchema, sessionCancelValueSchema, sessionCreateRequestSchema,
   sessionCreateValueSchema, sessionEventSchema, sessionHistoryRequestSchema, sessionHistoryValueSchema,
   sessionIdSchema, sessionListRequestSchema, sessionListValueSchema, sessionModelsRequestSchema,
   sessionModelsValueSchema, sessionPromptRequestSchema, sessionPromptValueSchema,
@@ -137,6 +138,17 @@ describe('rpcReceiptSchema', () => {
 })
 
 describe('sessions domain schemas', () => {
+  it('validates explicit activation with the resulting model authority', () => {
+    expect(sessionActivateRequestSchema.parse({ sessionId: 's1' })).toEqual({ sessionId: 's1' })
+    expect(sessionActivateValueSchema.parse({
+      current: { provider: 'codex', model: 'model-a' },
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: true, fork: false },
+      groups: [],
+      failures: [],
+    }).current).toEqual({ provider: 'codex', model: 'model-a' })
+  })
+
   it('validates ids, summaries, and the event passthrough envelope', () => {
     expect(sessionIdSchema.parse('s1')).toBe('s1')
     expect(() => sessionIdSchema.parse('')).toThrow()
@@ -235,6 +247,13 @@ describe('sessions domain schemas', () => {
       groups: [],
       failures: [],
     })).toHaveProperty('capabilities.fork', false)
+    expect(sessionModelsValueSchema.parse({
+      current: null,
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: true, fork: false },
+      groups: [],
+      failures: [],
+    })).toHaveProperty('current', null)
     expect(sessionSelectModelRequestSchema.parse({
       sessionId: 's1',
       provider: 'deepseek-official',

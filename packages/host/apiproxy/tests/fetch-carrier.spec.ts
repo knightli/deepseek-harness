@@ -71,6 +71,21 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
           },
         }
       },
+      async activate(request) {
+        return {
+          rpcId: request.rpcId,
+          result: {
+            ok: true,
+            value: {
+              current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+              routable: true,
+              capabilities: { imageInput: true, modelSelection: true, fork: true },
+              groups: [],
+              failures: [],
+            },
+          },
+        }
+      },
       async selectModel(request) {
         return {
           rpcId: request.rpcId,

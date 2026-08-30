@@ -329,6 +329,30 @@ describe('capability snapshot', () => {
     expect(api.callsOf('session.models')).toHaveLength(1)
   })
 
+  it('activates input only through the explicit client verb and publishes the acquired authority', async () => {
+    const { api, session } = makeSession()
+    await Promise.resolve()
+    await Promise.resolve()
+    api.onActivate = () => Promise.resolve(ok({
+      current: { provider: 'codex', model: 'model-a' },
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: true, fork: false },
+      groups: [],
+      failures: [],
+    }))
+
+    const result = await session.activateForInput()
+
+    expect(result.ok).toBe(true)
+    expect(api.callsOf('session.activate')).toEqual([{ sessionId: SID }])
+    expect(session.modelDirectory.getSnapshot()).toMatchObject({
+      current: { provider: 'codex', model: 'model-a' },
+      routable: true,
+      status: 'ready',
+      error: null,
+    })
+  })
+
   it('retracts the previous model authority synchronously when a refresh starts', async () => {
     const { api, session } = makeSession()
     await Promise.resolve()

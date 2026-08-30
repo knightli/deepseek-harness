@@ -2385,6 +2385,14 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         groups: fixtureModelGroups(),
         failures: [],
       }),
+      activate: request => ok(request, {
+        current: modelSelections.get(request.payload.sessionId)
+          ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+        routable: true,
+        capabilities: { imageInput: true, modelSelection: true, fork: true },
+        groups: fixtureModelGroups(),
+        failures: [],
+      }),
       selectModel: (request) => {
         const selected: ModelSelection = {
           provider: request.payload.provider,
@@ -3083,6 +3091,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'session.create': return this.api.sessions.create(request)
       case 'session.history': return this.api.sessions.history(request)
       case 'session.models': return this.api.sessions.models(request)
+      case 'session.activate': return this.api.sessions.activate(request)
       case 'session.selectModel': return this.api.sessions.selectModel(request)
       case 'session.rename': return this.api.sessions.rename(request)
       case 'session.fork': return this.api.sessions.fork(request)

@@ -160,8 +160,12 @@ export interface SessionCapabilities {
 
 /** Detached model-directory snapshot for one session. */
 export interface SessionModels {
-  /** Model selection for the session's next assembled step. */
-  current: ModelSelection
+  /**
+   * Model selection for the session's next assembled step, or `null` when an
+   * external authority can expose the directory before it knows that exact
+   * selection.
+   */
+  current: ModelSelection | null
   /**
    * Whether the live Agent can accept an ordinary text prompt. This may be
    * true because an adapter serves `current.provider` or because the Agent
@@ -298,6 +302,12 @@ export interface SessionsApi {
    * lookups run independently; subagents reject with `agent-busy`.
    */
   models(request: RpcRequest<{ sessionId: SessionId }>): Promise<RpcResponse<SessionModels>>
+
+  /**
+   * Activates the exact Session for interactive use. External authorities may
+   * acquire their writer here; a conflicting owner returns `thread-busy`.
+   */
+  activate(request: RpcRequest<{ sessionId: SessionId }>): Promise<RpcResponse<SessionModels>>
 
   /**
    * Selects the complete model selection for this session. Exact model metadata

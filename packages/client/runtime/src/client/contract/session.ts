@@ -20,7 +20,7 @@ import type { ObservableSnapshot } from './store.ts'
 
 /** Session-owned model directory projection shared by every stock model-selection entry. */
 export interface SessionModelDirectorySnapshot {
-  /** Host selection for the next assembled step; null until the first successful read. */
+  /** Host selection for the next assembled step; an external passive directory may publish null. */
   readonly current: ModelSelection | null
   /** Whether the Host can route ordinary text for the current selection. */
   readonly routable: boolean | null
@@ -65,6 +65,11 @@ export interface ISession {
    * @returns the replacement Host result after the previous authority is withdrawn.
    */
   refreshModels(): Promise<RpcResult<SessionModels>>
+  /**
+   * Establish interactive authority after an explicit user gesture.
+   * @returns the acquired model authority, or the stable activation error.
+   */
+  activateForInput(): Promise<RpcResult<SessionModels>>
   /**
    * Select the complete provider/model/reasoning route for the next assembled step.
    * @param selection - complete provider, model, and optional reasoning effort.

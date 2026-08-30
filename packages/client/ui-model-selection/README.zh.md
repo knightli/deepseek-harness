@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-模型选择插件（浏览器侧）：**两个入口共用一份由 runtime Session 持有的目录**。`ModelDirectoryResolver`（`ctx.modelDirectories`）只为每个会话创建薄 facade：`/model` popupSelect 贡献项（经 `ctx.commandUi` 注册）与 composer 的具名 `conversation.input.model` slot 订阅同一个 `Session.modelDirectory` observable，并把 `loadModels`／`refreshModels`／`selectModel` 委托给该 Session。本插件不保留第二份 groups／current／routable store，也不直接发出 wire RPC。紧凑型 composer 触发器会打开两级 Model/Effort 菜单：模型仍按提供方分组，所选具体模型则提供由其适配器持有的推理强度名称、说明和默认值。`/model` 应用所选模型的默认推理强度，composer 随后可以选择任一已公布的推理强度。
+模型选择插件（浏览器侧）：**两个入口共用一份由 runtime Session 持有的目录**。`ModelDirectoryResolver`（`ctx.modelDirectories`）只为每个会话创建薄 facade：`/model` popupSelect 贡献项（经 `ctx.commandUi` 注册）与 composer 的具名 `conversation.input.model` slot 订阅同一个 `Session.modelDirectory` observable，并把 `loadModels`／`refreshModels`／`selectModel` 委托给该 Session。本插件不保留第二份 groups／current／routable store，也不直接发出 wire RPC。当外部权威尚不知道下一个步骤的精确选择时，目录的 `current` 为 `null`：两个入口仍列出全部已公布模型，不标记活动行，composer 也保持显示 `选择模型`，直至 Session 权威公布精确选择。产品专属的 composer block 可以在 Session 等待显式激活期间让该触发器保持不可操作。紧凑型 composer 触发器在其他情况下会打开两级 Model/Effort 菜单：模型仍按提供方分组，所选具体模型则提供由其适配器持有的推理强度名称、说明和默认值。`/model` 应用所选模型的默认推理强度，composer 随后可以选择任一已公布的推理强度。
 
 Host 报告的 `ModelSelection` 是唯一的选择事实，其中包含提供方、模型与推理（reasoning）强度；但只有当该提供方／模型对仍在已公布分组中时才会回显。目录行缺席时，可路由的选择保持不变，但触发器会提示 `Select model`；系统不会合成陈旧行，且在用户选择已公布的模型之前不会显示 Effort 行。runtime 的 request identity 与 connection generation 会阻止旧响应覆盖新结果；断连会同步撤回目录，重连则在显示前重新加载 Host 恢复的选择。各提供方的元数据获取失败会内联列出，同时可用分组仍可选择；选择失败会保留先前的选择和目录。
 

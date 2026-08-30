@@ -10,7 +10,7 @@ Host 此前把每个持久化 Session 都视为本地权威。对于把其他运
 
 ## 决策
 
-`@deepseek-ai/dsh-host-apiproxy` 暴露可选的 `SessionAuthority` service。`refresh(sessionId)` 会在向客户端提供外部拥有的冷态或空闲 Session 尾页、或恢复该 Session 之前执行；`rename(sessionId, title)` 会先修改外部拥有者，再把对方接受的标题投影进本地 Session。rename 返回 `undefined` 表示该 Session 不归外部权威所有，Host 随即保留普通的本地重命名路径。
+`@deepseek-ai/dsh-host-apiproxy` 暴露可选的 `SessionAuthority` service。`refresh(sessionId)` 会在向客户端提供外部拥有的冷态或空闲 Session 尾页、或恢复该 Session 之前执行；`rename(sessionId, title)` 会先修改外部拥有者，再把对方接受的标题投影进本地 Session。rename 返回 `undefined` 表示该 Session 不归外部权威所有，Host 随即保留普通的本地重命名路径。可选的 `models(sessionId)` 与 `selectModel(sessionId, selection)` 操作同样让模型目录读取和选择写入归该 owner 管理。当目录已知、但精确的下一步选择尚未知时，目录可以在取得 writer 前暴露 `current: null`；仅打开或读取该 Session 仍然保持被动操作。显式的 `session.activate` 操作才是写意图边界：`SessionAuthority.activate(sessionId)` 可以取得 writer 并返回完整模型权威，也可以返回 `busy`，让 API 公布稳定的 `thread-busy` 拒绝。模型选择只能发生在激活之后，不再承担隐式取得 writer 的职责。
 
 目录刷新与 transcript 刷新保持分离。`refreshCatalog()` 可以建立只有 header 的 Session 行，`listMetadata(sessionId)` 则同步暴露上一次成功刷新得到的 `nonBlank: true` 提示，使这些经外部确认的会话在 transcript 投影前仍然可见。该提示不能把本地非空 Session 标为空白，Host 汇总列表行时也不执行外部 I/O。
 

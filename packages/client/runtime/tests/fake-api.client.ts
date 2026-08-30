@@ -96,6 +96,7 @@ export class FakeApiClient implements IApiClient {
     }],
     failures: [],
   }))
+  onActivate: (payload: unknown) => Promise<RpcResponse<SessionModels>> = payload => this.onModels(payload)
   onSelectModel: (payload: { provider: string; model: string }) =>
   Promise<RpcResponse<{ selected: ModelSelection }>> =
     payload => Promise.resolve(ok({ selected: { provider: payload.provider, model: payload.model } }))
@@ -148,6 +149,7 @@ export class FakeApiClient implements IApiClient {
     history: (payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }) =>
       this.record('session.history', payload, this.onHistory(payload)),
     models: (payload: unknown) => this.record('session.models', payload, this.onModels(payload)),
+    activate: (payload: unknown) => this.record('session.activate', payload, this.onActivate(payload)),
     selectModel: (payload: { provider: string; model: string }) =>
       this.record('session.selectModel', payload, this.onSelectModel(payload)),
     rename: (payload: unknown) => this.record('session.rename', payload, this.onRename(payload)),
