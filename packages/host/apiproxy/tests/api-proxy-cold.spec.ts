@@ -13,7 +13,7 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { TypertLookupFailure } from '@deepseek-ai/dsh-typert-protocol'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
@@ -305,6 +305,77 @@ describe('attached updatedAt tracks human prompts', () => {
 })
 
 describe('cold history recovery view', () => {
+  it('delegates an externally-owned model directory and selection without acquiring an Agent', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    const sessionId = sid('session-authority-model-selection')
+    const current = {
+      provider: 'codex',
+      model: 'model-a',
+      reasoningEffort: ReasoningEffortId('low'),
+    }
+    const directory = {
+      current,
+      routable: true,
+      capabilities: { imageInput: false, modelSelection: true, fork: false },
+      groups: [{
+        id: 'codex',
+        name: 'Codex',
+        models: [{
+          id: 'model-a',
+          name: 'Model A',
+          reasoning: {
+            supported: [
+              { id: ReasoningEffortId('low'), name: 'low', description: 'Low effort' },
+              { id: ReasoningEffortId('high'), name: 'high', description: 'High effort' },
+            ],
+            default: ReasoningEffortId('low'),
+          },
+        }],
+      }],
+      failures: [],
+    }
+    const models = vi.fn(() => Promise.resolve(directory))
+    const selectModel = vi.fn((_sessionId, selection) => Promise.resolve(selection))
+    const refresh = vi.fn(() => Promise.reject(new Error('writer acquisition must not run')))
+    const describeSession = vi.fn(() => Promise.reject(new Error('describe fallback must not run')))
+    ctx.provide('sessionAuthority', {
+      refresh,
+      describe: describeSession,
+      models,
+      selectModel,
+    })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const listed = await api.sessions.models(request({ sessionId }))
+    const selected = await api.sessions.selectModel(request({
+      sessionId,
+      provider: 'codex',
+      model: 'model-a',
+      reasoningEffort: 'high',
+    }))
+
+    expect(listed.result).toEqual({ ok: true, value: directory })
+    expect(selected.result).toEqual({
+      ok: true,
+      value: {
+        selected: { provider: 'codex', model: 'model-a', reasoningEffort: 'high' },
+      },
+    })
+    expect(models).toHaveBeenCalledWith(sessionId)
+    expect(selectModel).toHaveBeenCalledWith(sessionId, {
+      provider: 'codex',
+      model: 'model-a',
+      reasoningEffort: 'high',
+    })
+    expect(refresh).not.toHaveBeenCalled()
+    expect(describeSession).not.toHaveBeenCalled()
+  })
+
   it('keeps externally-owned model discovery read-only before writer acquisition', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

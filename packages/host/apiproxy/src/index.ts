@@ -19,7 +19,7 @@ import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionTitleAuthorityId } from '@deepseek-ai/dsh-session-title'
 import type { ApiProxy } from './api/index.ts'
-import type { SessionCapabilities } from './api/sessions.ts'
+import type { SessionCapabilities, SessionModels } from './api/sessions.ts'
 import { createApiProxy, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES } from './api-proxy.ts'
 import {
   DEFAULT_SESSION_LOG_COMPRESSION_LEVEL,
@@ -85,6 +85,13 @@ export interface SessionAuthority {
    * @returns authoritative read-only facts, or `undefined` for an unowned Session.
    */
   describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>
+  /** Return a complete advisory directory for an externally-owned Session. */
+  models?(sessionId: SessionId): Promise<SessionModels | undefined>
+  /** Mutate the next-turn selection for an externally-owned Session. */
+  selectModel?(
+    sessionId: SessionId,
+    selection: ModelSelection,
+  ): Promise<ModelSelection | undefined>
   /**
    * Reconcile an externally-owned Session before a cold or idle access.
    * @param sessionId - exact DSH Session identity whose binding is authoritative.

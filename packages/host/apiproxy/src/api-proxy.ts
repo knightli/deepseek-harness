@@ -2499,6 +2499,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async models(request) {
         const { sessionId } = request.payload
+        try {
+          const external = await ctx.get('sessionAuthority')?.models?.(sessionId)
+          if (external !== undefined) return ok(request, external)
+        } catch {
+          return err(request, {
+            code: 'internal',
+            message: 'external Session authority model directory failed',
+            details: {},
+          })
+        }
         const described = await describeExternalSession(sessionId)
         if ('error' in described) return err(request, described.error)
         const authority = described.description
@@ -2534,6 +2544,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async selectModel(request) {
         const { sessionId, provider, model, reasoningEffort } = request.payload
+        const requested: ModelSelection = {
+          provider,
+          model,
+          ...reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: ReasoningEffortId(reasoningEffort) },
+        }
+        try {
+          const external = await ctx.get('sessionAuthority')?.selectModel?.(sessionId, requested)
+          if (external !== undefined) return ok(request, { selected: { ...external } })
+        } catch {
+          return err(request, {
+            code: 'model-unavailable',
+            message: 'model selection is unavailable for this session',
+            details: { provider, model },
+          })
+        }
         const described = await describeExternalSession(sessionId)
         if ('error' in described) return err(request, described.error)
         if (described.description?.capabilities.modelSelection === false) {
