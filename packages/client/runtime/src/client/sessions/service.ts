@@ -163,11 +163,17 @@ export function workspaceTitleOf(cwd: string): string {
 }
 
 /**
- * Display title projection: durable title, project directory basename, then
- * the raw id.
+ * Display title projection: durable title, provider list hint, project
+ * directory basename, then the raw id.
  */
-function displayTitleOf(title: string | undefined, cwd: string | undefined, id: SessionId): string {
+function displayTitleOf(
+  title: string | undefined,
+  fallback: string | undefined,
+  cwd: string | undefined,
+  id: SessionId,
+): string {
   if (title !== undefined) return title
+  if (fallback !== undefined) return fallback
   if (cwd !== undefined && cwd !== '') {
     const base = workspaceTitleOf(cwd)
     if (base !== '') return base
@@ -678,7 +684,9 @@ export class SessionRuntime implements ISessions {
       ids.push(entry.sessionId)
       byId[entry.sessionId] = {
         id: entry.sessionId,
-        displayTitle: displayTitleOf(entry.title, entry.cwd, entry.sessionId),
+        displayTitle: displayTitleOf(
+          entry.title, entry.displayTitleFallback, entry.cwd, entry.sessionId,
+        ),
         running: entry.running,
         ...(entry.completed ? { completed: true } : {}),
         blank: entry.blank,

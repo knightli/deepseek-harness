@@ -30,13 +30,18 @@ interface SessionAuthorityRename {
 }
 ```
 
-An external Session authority can publish a one-way list hint separately from the read-only runtime facts used by model and capability discovery.
+An external Session authority can publish read-only list hints separately from the runtime facts used by model and capability discovery. `displayTitleFallback` labels only an untitled list row; it is neither durable title state nor a rename input.
 
 ```ts type-equiv
-/** One-way list hint for a conversation whose transcript remains externally owned. */
+/** Read-only list hints for a conversation whose transcript remains externally owned. */
 interface SessionAuthorityListMetadata {
   /** The authority has confirmed this is a conversation, even before local history is projected. */
   readonly nonBlank: true
+  /**
+   * Provider-owned list label used only when no durable title is projected.
+   * It is not title state and must not participate in rename or persistence.
+   */
+  readonly displayTitleFallback?: string
 }
 ```
 
@@ -207,10 +212,11 @@ refreshCatalog?(): Promise<void>
 
 /**
  * Read the last successfully refreshed catalog hint without I/O.
- * The hint is deliberately one-way: an authority may make a conversation
- * visible, but may not hide a locally non-blank Session.
+ * The hints are deliberately read-only: an authority may make a conversation
+ * visible and label an untitled list row, but may not hide a locally
+ * non-blank Session or replace durable title state.
  * @param sessionId - exact DSH Session identity whose catalog metadata is requested.
- * @returns the current visibility hint, or `undefined` for an unowned Session.
+ * @returns the current list hints, or `undefined` for an unowned Session.
  */
 listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined
 
@@ -261,7 +267,7 @@ rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | u
 
 Types: [ModelSelection](core.md) · [SessionId](core.md)
 
-Source: [`packages/host/apiproxy/src/index.ts:76`](../../packages/host/apiproxy/src/index.ts)
+Source: [`packages/host/apiproxy/src/index.ts:81`](../../packages/host/apiproxy/src/index.ts)
 
 <a id="ctxsessiontitle--sessiontitleservice"></a>
 

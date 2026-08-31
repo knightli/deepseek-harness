@@ -216,6 +216,11 @@ export interface SessionSummary {
   /** Session working directory (header.cwd passthrough); absent when unrecorded. */
   cwd?: string
   /**
+   * Read-only provider label for an untitled list row. Clients use it after a
+   * durable title and before their ordinary cwd/SessionId display fallbacks.
+   */
+  displayTitleFallback?: string
+  /**
    * Agent preset this session's agent was composed from (header passthrough);
    * absent when the deployment composes no presets. A surface offering a
    * switch reads this to show what the session actually runs rather than what

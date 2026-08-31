@@ -60,7 +60,9 @@ describe('sessions.list cold merge', () => {
       refresh: () => Promise.resolve(),
       refreshCatalog: () => Promise.resolve(),
       listMetadata: (sessionId: SessionId) => (
-        sessionId === meta.id ? { nonBlank: true as const } : undefined
+        sessionId === meta.id
+          ? { nonBlank: true as const, displayTitleFallback: 'External catalog preview' }
+          : undefined
       ),
     })
     const api = createApiProxy(ctx, {
@@ -75,6 +77,7 @@ describe('sessions.list cold merge', () => {
     expect(response.result.value.items).toContainEqual(expect.objectContaining({
       sessionId: meta.id,
       blank: false,
+      displayTitleFallback: 'External catalog preview',
     }))
     expect(readFrom).not.toHaveBeenCalled()
   })

@@ -31,6 +31,7 @@ function bench(): Bench {
 type FeedRow = {
   id: string
   cwd?: string
+  displayTitleFallback?: string
   parentId?: string
   origin?: 'subagent'
   running?: boolean
@@ -43,6 +44,7 @@ async function feedList(b: Bench, rows: FeedRow[]): Promise<void> {
     items: rows.map(r => ({
       sessionId: sid(r.id), updatedAt: 1, running: r.running ?? false, blank: r.blank ?? false,
       ...(r.cwd !== undefined ? { cwd: r.cwd } : {}),
+      ...(r.displayTitleFallback !== undefined ? { displayTitleFallback: r.displayTitleFallback } : {}),
       ...(r.parentId !== undefined ? { parentSessionId: sid(r.parentId) } : {}),
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(r.agentPreset !== undefined ? { agentPreset: r.agentPreset } : {}),
@@ -70,6 +72,29 @@ describe('list store projection', () => {
       displayTitle: 's2', parentId: 's1', origin: 'subagent', running: true,
     })
     expect(state.byId[sid('s2')]?.title).toBeUndefined()
+  })
+
+  it('uses an external display-title hint only between durable title and cwd fallbacks', async () => {
+    const b = bench()
+    b.svc.handleMuxEnvelope({
+      rpcId: 'title-fallback' as never,
+      payload: {
+        type: 'session/projection', sessionId: sid('named'), key: 'title', value: 'Durable title', seq: 2,
+      } as never,
+    })
+    await feedList(b, [
+      { id: 'named', cwd: '/workspace/project', displayTitleFallback: 'Ignored preview' },
+      { id: 'preview', cwd: '/workspace/project', displayTitleFallback: 'External preview' },
+      { id: 'cwd', cwd: '/workspace/project' },
+      { id: 'id-only' },
+    ])
+
+    const { byId } = b.svc.list.getSnapshot()
+    expect(byId[sid('named')]?.displayTitle).toBe('Durable title')
+    expect(byId[sid('preview')]?.displayTitle).toBe('External preview')
+    expect(byId[sid('cwd')]?.displayTitle).toBe('project')
+    expect(byId[sid('id-only')]?.displayTitle).toBe('id-only')
+    expect(byId[sid('preview')]?.title).toBeUndefined()
   })
 
   it('reprojects a blank session whose composition switched and nothing else moved', async () => {

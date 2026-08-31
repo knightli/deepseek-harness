@@ -109,6 +109,7 @@ import {
   inspectApiRemoteSession,
 } from '@deepseek-ai/dsh-api-remotes'
 import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-path-opener.ts'
+import type { SessionAuthorityListMetadata } from './index.ts'
 
 /** Page size when history is called without maxMessages. */
 const DEFAULT_MAX_MESSAGES = 50
@@ -528,9 +529,9 @@ function sessionBlank(session: Session): boolean {
   return !session.events.some(event => event.type === 'turn/start')
 }
 
-/** External catalogs may prove a conversation exists before its transcript is projected locally. */
-function authorityConfirmsNonBlank(ctx: Context, sessionId: SessionId): boolean {
-  return ctx.get('sessionAuthority')?.listMetadata?.(sessionId)?.nonBlank === true
+/** Read the last successful external list snapshot without performing I/O. */
+function authorityListMetadata(ctx: Context, sessionId: SessionId): SessionAuthorityListMetadata | undefined {
+  return ctx.get('sessionAuthority')?.listMetadata?.(sessionId)
 }
 
 /** Advance the Session-list hint projection by one committed event. */
@@ -578,11 +579,15 @@ function sessionListFields(header: SessionHeader, events: readonly SessionEvent[
 /** SessionSummary projection for attached (in-memory) sessions. */
 function summarize(ctx: Context, session: Session, running: boolean): SessionSummary {
   const metadata = sessionListMetadata(session.events)
+  const authorityMetadata = authorityListMetadata(ctx, session.id)
   return {
     sessionId: session.id,
     updatedAt: sessionListUpdatedAt(session.header, metadata),
     running,
-    blank: authorityConfirmsNonBlank(ctx, session.id) ? false : metadata.blank,
+    blank: authorityMetadata?.nonBlank === true ? false : metadata.blank,
+    ...(authorityMetadata?.displayTitleFallback === undefined
+      ? {}
+      : { displayTitleFallback: authorityMetadata.displayTitleFallback }),
     ...sessionListFields(session.header, session.events),
   }
 }
@@ -634,7 +639,8 @@ async function summarizeCold(
   blankProbeMaxBytes: number,
   signal?: AbortSignal,
 ): Promise<SessionSummary> {
-  const externallyNonBlank = authorityConfirmsNonBlank(ctx, meta.id)
+  const authorityMetadata = authorityListMetadata(ctx, meta.id)
+  const externallyNonBlank = authorityMetadata?.nonBlank === true
   const probed = externallyNonBlank || metadata?.blank === false
     ? undefined
     : await probeColdSessionMetadata(ctx, persistence, meta, blankProbeMaxBytes, signal)
@@ -643,6 +649,9 @@ async function summarizeCold(
     updatedAt: sessionListUpdatedAt(meta, probed ?? metadata),
     running: false,
     blank: externallyNonBlank || metadata?.blank === false ? false : probed?.blank ?? false,
+    ...(authorityMetadata?.displayTitleFallback === undefined
+      ? {}
+      : { displayTitleFallback: authorityMetadata.displayTitleFallback }),
     // Header-only: reading the log for a blank-window preset switch would
     // defeat the same index read, and attaching the session replaces this row
     // with `summarize()`, which resolves the switch from the events.

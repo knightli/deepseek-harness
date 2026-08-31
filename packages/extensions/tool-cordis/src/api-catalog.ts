@@ -1042,9 +1042,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined',
-        description: 'Read the last successfully refreshed catalog hint without I/O. The hint is deliberately one-way: an authority may make a conversation visible, but may not hide a locally non-blank Session.',
+        description: 'Read the last successfully refreshed catalog hint without I/O. The hints are deliberately read-only: an authority may make a conversation visible and label an untitled list row, but may not hide a locally non-blank Session or replace durable title state.',
         parameters: [{ name: 'sessionId', description: 'exact DSH Session identity whose catalog metadata is requested.' }],
-        returns: 'the current visibility hint, or `undefined` for an unowned Session.',
+        returns: 'the current list hints, or `undefined` for an unowned Session.',
       },
       {
         signature: 'describe?(sessionId: SessionId): Promise<SessionAuthorityDescription | undefined>',
@@ -3865,7 +3865,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionAuthorityListMetadata',
-    declaration: 'export interface SessionAuthorityListMetadata {\n    readonly nonBlank: true;\n}',
+    declaration: 'export interface SessionAuthorityListMetadata {\n    readonly nonBlank: true;\n    readonly displayTitleFallback?: string;\n}',
   },
   {
     name: 'SessionAuthorityRename',

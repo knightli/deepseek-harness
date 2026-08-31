@@ -61,10 +61,15 @@ export interface SessionAuthorityDescription {
   readonly capabilities: SessionCapabilities
 }
 
-/** One-way list hint for a conversation whose transcript remains externally owned. */
+/** Read-only list hints for a conversation whose transcript remains externally owned. */
 export interface SessionAuthorityListMetadata {
   /** The authority has confirmed this is a conversation, even before local history is projected. */
   readonly nonBlank: true
+  /**
+   * Provider-owned list label used only when no durable title is projected.
+   * It is not title state and must not participate in rename or persistence.
+   */
+  readonly displayTitleFallback?: string
 }
 
 /** Result of an explicit attempt to make an externally-owned Session interactive. */
@@ -78,10 +83,11 @@ export interface SessionAuthority {
   refreshCatalog?(): Promise<void>
   /**
    * Read the last successfully refreshed catalog hint without I/O.
-   * The hint is deliberately one-way: an authority may make a conversation
-   * visible, but may not hide a locally non-blank Session.
+   * The hints are deliberately read-only: an authority may make a conversation
+   * visible and label an untitled list row, but may not hide a locally
+   * non-blank Session or replace durable title state.
    * @param sessionId - exact DSH Session identity whose catalog metadata is requested.
-   * @returns the current visibility hint, or `undefined` for an unowned Session.
+   * @returns the current list hints, or `undefined` for an unowned Session.
    */
   listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined
   /**

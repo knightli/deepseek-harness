@@ -12,7 +12,7 @@ Host 此前把每个持久化 Session 都视为本地权威。对于把其他运
 
 `@deepseek-ai/dsh-host-apiproxy` 暴露可选的 `SessionAuthority` service。`refresh(sessionId)` 会在向客户端提供外部拥有的冷态或空闲 Session 尾页、或恢复该 Session 之前执行；`rename(sessionId, title)` 会先修改外部拥有者，再把对方接受的标题投影进本地 Session。rename 返回 `undefined` 表示该 Session 不归外部权威所有，Host 随即保留普通的本地重命名路径。可选的 `models(sessionId)` 与 `selectModel(sessionId, selection)` 操作同样让模型目录读取和选择写入归该 owner 管理。当目录已知、但精确的下一步选择尚未知时，目录可以在取得 writer 前暴露 `current: null`；仅打开或读取该 Session 仍然保持被动操作。显式的 `session.activate` 操作才是写意图边界：`SessionAuthority.activate(sessionId)` 可以取得 writer 并返回完整模型权威，也可以返回 `busy`，让 API 公布稳定的 `thread-busy` 拒绝。模型选择只能发生在激活之后，不再承担隐式取得 writer 的职责。
 
-目录刷新与 transcript 刷新保持分离。`refreshCatalog()` 可以建立只有 header 的 Session 行，`listMetadata(sessionId)` 则同步暴露上一次成功刷新得到的 `nonBlank: true` 提示，使这些经外部确认的会话在 transcript 投影前仍然可见。该提示不能把本地非空 Session 标为空白，Host 汇总列表行时也不执行外部 I/O。
+目录刷新与 transcript 刷新保持分离。`refreshCatalog()` 可以建立只有 header 的 Session 行，`listMetadata(sessionId)` 则同步暴露上一次成功刷新得到的只读提示，使这些经外部确认的会话在 transcript 投影前仍然可见。`nonBlank: true` 不能把本地非空 Session 标为空白。可选的 `displayTitleFallback` 只在客户端没有持久标题时提供一个由 provider 拥有的标签；它会随 `SessionSummary` 传递，但绝不进入标题投影、历史、持久化或重命名。stock 客户端依次采用持久标题、外部展示回退、cwd basename 和 Session id 作为展示文本。Host 汇总列表行时不执行外部 I/O。
 
 该 seam 只依赖精确身份。provider 决定某个 `SessionId` 是否存在外部 binding；Host 不会根据标题、cwd、时间戳或内容猜测身份，也不会创建平行 Session。已经挂载并处于 running 状态的 Agent 仍是当前运行时权威，refresh 不会打断它。
 
@@ -32,6 +32,8 @@ provider 失败会在 gateway 边界收敛。对外的 history、prompt 与 rena
 
 **把外部无标题当作无操作。** 不采用，因为当权威明确报告无标题时，这会继续保留过期的本地或外部文本。
 
+**把目录 preview 持久化为 Session 标题。** 不采用，因为 provider 的只读目录标签不是可写标题权威。持久化会制造竞争来源、使重命名语义产生误导，并在外部目录变化后继续保留过期 preview 文本。
+
 ## 后果
 
-部署可以把一个由外部拥有的会话投影到 stock DSH Session/history/title 视图，并按精确 binding 恢复，而不复制执行状态。成功的目录刷新可以立即暴露该行，同时保持完整历史的懒加载。尾页读取、writer 获取与已接受的重命名成为异步权威边界，并会在不确定时失败关闭。provider 必须串行化同一 Session 的 refresh 与 rename，并在卸载时 drain 这些操作。Host 测试固定目录可见性、公共错误收敛、`thread-busy` wire 分支与精确的外部标题投影；部署层的真实可运行 Host 测试还必须证明具体 provider 在刷新时保持单一运行时拥有者。
+部署可以把一个由外部拥有的会话投影到 stock DSH Session/history/title 视图，并按精确 binding 恢复，而不复制执行状态。成功的目录刷新可以立即暴露并标记该行，同时保持完整历史的懒加载；之后出现的持久标题会自然取得优先权，而无需修改或清除目录提示。尾页读取、writer 获取与已接受的重命名成为异步权威边界，并会在不确定时失败关闭。provider 必须串行化同一 Session 的 refresh 与 rename，并在卸载时 drain 这些操作。Host 测试固定目录可见性、列表标签优先级、公共错误收敛、`thread-busy` wire 分支与精确的外部标题投影；部署层的真实可运行 Host 测试还必须证明具体 provider 在刷新时保持单一运行时拥有者。

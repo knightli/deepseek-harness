@@ -30,13 +30,18 @@ interface SessionAuthorityRename {
 }
 ```
 
-外部 Session 权威可以把单向列表提示与模型和能力发现所使用的只读运行时事实分开发布。
+外部 Session 权威可以把只读列表提示与模型和能力发现所使用的运行时事实分开发布。`displayTitleFallback` 只标记尚无标题的列表行；它既不是持久标题状态，也不是重命名输入。
 
 ```ts type-equiv
-/** One-way list hint for a conversation whose transcript remains externally owned. */
+/** Read-only list hints for a conversation whose transcript remains externally owned. */
 interface SessionAuthorityListMetadata {
   /** The authority has confirmed this is a conversation, even before local history is projected. */
   readonly nonBlank: true
+  /**
+   * Provider-owned list label used only when no durable title is projected.
+   * It is not title state and must not participate in rename or persistence.
+   */
+  readonly displayTitleFallback?: string
 }
 ```
 
@@ -207,10 +212,11 @@ refreshCatalog?(): Promise<void>
 
 /**
  * Read the last successfully refreshed catalog hint without I/O.
- * The hint is deliberately one-way: an authority may make a conversation
- * visible, but may not hide a locally non-blank Session.
+ * The hints are deliberately read-only: an authority may make a conversation
+ * visible and label an untitled list row, but may not hide a locally
+ * non-blank Session or replace durable title state.
  * @param sessionId - exact DSH Session identity whose catalog metadata is requested.
- * @returns the current visibility hint, or `undefined` for an unowned Session.
+ * @returns the current list hints, or `undefined` for an unowned Session.
  */
 listMetadata?(sessionId: SessionId): SessionAuthorityListMetadata | undefined
 
@@ -261,7 +267,7 @@ rename?(sessionId: SessionId, title: string): Promise<SessionAuthorityRename | u
 
 Types: [ModelSelection](core.md) · [SessionId](core.md)
 
-Source: [`packages/host/apiproxy/src/index.ts:76`](../../packages/host/apiproxy/src/index.ts)
+Source: [`packages/host/apiproxy/src/index.ts:81`](../../packages/host/apiproxy/src/index.ts)
 
 <a id="ctxsessiontitle--sessiontitleservice"></a>
 
