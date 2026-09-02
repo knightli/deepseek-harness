@@ -807,19 +807,25 @@ export function WorkspaceBrowser({
   const catalogRefreshing = baselinesReady && !catalogHasError
     && (workspaceState === 'loading' || sessionState === 'loading')
   const catalogStaleError = baselinesReady && catalogHasError
+  const catalogSettled = baselinesReady && workspaceState === 'idle' && sessionState === 'idle'
   const [settledCatalog, setSettledCatalog] = useState<{
     workspaces: typeof liveWorkspaces
     sessions: typeof liveSessions
-  } | null>(baselinesReady && workspaceState === 'idle' && sessionState === 'idle'
+  } | null>(catalogSettled
     ? { workspaces: liveWorkspaces, sessions: liveSessions }
     : null)
   useEffect(() => {
-    if (!baselinesReady || workspaceState !== 'idle' || sessionState !== 'idle') return
+    if (!baselinesReady) {
+      setSettledCatalog(null)
+      return
+    }
+    if (!catalogSettled) return
     setSettledCatalog({ workspaces: liveWorkspaces, sessions: liveSessions })
-  }, [baselinesReady, liveSessions, liveWorkspaces, sessionState, workspaceState])
-  const visibleCatalog = baselinesReady && settledCatalog !== null
-    ? settledCatalog
-    : { workspaces: liveWorkspaces, sessions: liveSessions }
+  }, [baselinesReady, catalogSettled, liveSessions, liveWorkspaces])
+  const liveCatalog = { workspaces: liveWorkspaces, sessions: liveSessions }
+  const visibleCatalog = catalogSettled
+    ? liveCatalog
+    : baselinesReady && settledCatalog !== null ? settledCatalog : liveCatalog
   const workspaces = visibleCatalog.workspaces.items
   const workspacePhase = visibleCatalog.workspaces.phase
   const archivedSessionIds = visibleCatalog.workspaces.archivedSessionIds

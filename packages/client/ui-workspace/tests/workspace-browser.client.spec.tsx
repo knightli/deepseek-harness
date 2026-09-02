@@ -172,6 +172,15 @@ describe('WorkspaceBrowser', () => {
     expect(screen.getByRole('status').textContent).toBe('正在刷新会话…')
     expect(screen.getByText('stable-project')).toBeTruthy()
     expect(screen.queryByText('new-project')).toBeNull()
+
+    const newSessions = sessionState([summary('new-session', 2)])
+    rerender(b, {
+      useSessions: hook(newSessions),
+      useWorkspaces: hook(workspaceState([workspace('new-project', ['new-session'])])),
+    })
+
+    expect(screen.getByText('new-project')).toBeTruthy()
+    expect(screen.queryByText('stable-project')).toBeNull()
   })
 
   it('prunes deleted Workspace view state only after the Workspace baseline is ready', async () => {
