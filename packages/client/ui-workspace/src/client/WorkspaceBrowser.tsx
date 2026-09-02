@@ -797,17 +797,36 @@ export function WorkspaceBrowser({
   renderSlot,
   t,
 }: WorkspaceBrowserProps) {
-  const workspaces = useWorkspaces(state => state.items)
-  const workspacePhase = useWorkspaces(state => state.phase)
-  const workspaceState = useWorkspaces(state => state.state)
-  const baselinesReady = useWorkspaces(state => state.baselinesReady)
-  const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
-  const sessionState = useSessions(state => state.state ?? (state.phase === 'ready' ? 'idle' : 'loading'))
+  const liveWorkspaces = useWorkspaces(state => state)
+  const liveSessions = useSessions(state => state)
+  const workspaceState = liveWorkspaces.state
+  const baselinesReady = liveWorkspaces.baselinesReady
+  const sessionState = liveSessions.state ?? (liveSessions.phase === 'ready' ? 'idle' : 'loading')
   const catalogHasError = workspaceState === 'error' || sessionState === 'error'
   const catalogInitialError = !baselinesReady && catalogHasError
   const catalogRefreshing = baselinesReady && !catalogHasError
     && (workspaceState === 'loading' || sessionState === 'loading')
   const catalogStaleError = baselinesReady && catalogHasError
+  const [settledCatalog, setSettledCatalog] = useState<{
+    workspaces: typeof liveWorkspaces
+    sessions: typeof liveSessions
+  } | null>(baselinesReady && workspaceState === 'idle' && sessionState === 'idle'
+    ? { workspaces: liveWorkspaces, sessions: liveSessions }
+    : null)
+  useEffect(() => {
+    if (!baselinesReady || workspaceState !== 'idle' || sessionState !== 'idle') return
+    setSettledCatalog({ workspaces: liveWorkspaces, sessions: liveSessions })
+  }, [baselinesReady, liveSessions, liveWorkspaces, sessionState, workspaceState])
+  const visibleCatalog = baselinesReady && settledCatalog !== null
+    ? settledCatalog
+    : { workspaces: liveWorkspaces, sessions: liveSessions }
+  const workspaces = visibleCatalog.workspaces.items
+  const workspacePhase = visibleCatalog.workspaces.phase
+  const archivedSessionIds = visibleCatalog.workspaces.archivedSessionIds
+  const useVisibleSessions: WorkspaceBrowserProps['useSessions'] = useCallback(
+    selector => selector(visibleCatalog.sessions),
+    [visibleCatalog.sessions],
+  )
   // Live occupancy of this surface's directory-flow hole (the same source the
   // flow reads): a composition without a picking affordance can add nothing.
   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
@@ -1202,7 +1221,7 @@ export function WorkspaceBrowser({
         {wide && baselinesReady && (normalizedQuery !== ''
           ? (
             <SearchResults
-              useSessions={useSessions}
+              useSessions={useVisibleSessions}
               open={open}
               workspaces={workspaces}
               archivedSessionIds={archivedSessionIds}
@@ -1215,7 +1234,7 @@ export function WorkspaceBrowser({
           : groupBy === 'flat'
             ? (
               <FlatList
-                useSessions={useSessions} open={open} forkSession={onSessionFork}
+                useSessions={useVisibleSessions} open={open} forkSession={onSessionFork}
                 onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
                 archivedSessionIds={archivedSessionIds}
                 orderBy={orderBy}
@@ -1228,7 +1247,7 @@ export function WorkspaceBrowser({
             )
             : (
               <SessionTree
-                useSessions={useSessions}
+                useSessions={useVisibleSessions}
                 onSessionRename={onSessionRename}
                 onSessionArchive={onSessionArchive}
                 forkSession={onSessionFork}

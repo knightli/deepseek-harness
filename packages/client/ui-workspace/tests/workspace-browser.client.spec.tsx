@@ -155,6 +155,25 @@ describe('WorkspaceBrowser', () => {
     expect(screen.queryByText('hidden transport detail')).toBeNull()
   })
 
+  it('keeps one joined settled catalog when only one refresh result has committed', () => {
+    const stableSessions = sessionState([summary('stable-session', 1)])
+    const stableWorkspaces = workspaceState([workspace('stable-project', ['stable-session'])])
+    const b = mount({
+      useSessions: hook(stableSessions),
+      useWorkspaces: hook(stableWorkspaces),
+    })
+    expect(screen.getByText('stable-project')).toBeTruthy()
+
+    rerender(b, {
+      useSessions: hook({ ...stableSessions, state: 'loading' }),
+      useWorkspaces: hook(workspaceState([workspace('new-project', ['new-session'])])),
+    })
+
+    expect(screen.getByRole('status').textContent).toBe('正在刷新会话…')
+    expect(screen.getByText('stable-project')).toBeTruthy()
+    expect(screen.queryByText('new-project')).toBeNull()
+  })
+
   it('prunes deleted Workspace view state only after the Workspace baseline is ready', async () => {
     const pending = {
       ...workspaceState([]),

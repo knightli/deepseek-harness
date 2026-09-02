@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-02-workspace-catalog-readiness.md
-2026-09-02-workspace-catalog-readiness.md: e2ac3d19e5e3c6862e734a1327d8bc4b981f2fc7
-2026-09-02-workspace-catalog-readiness.zh.md: 8580821571ad25eed38a946e5367e68421ea895c
+2026-09-02-workspace-catalog-readiness.md: 8ecf45a79b3623bad1e2ea10eb9a1c71322417d8
+2026-09-02-workspace-catalog-readiness.zh.md: cb6165862678efdcdfa93c611143efe49d7672f4
