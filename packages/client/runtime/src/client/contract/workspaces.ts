@@ -14,6 +14,8 @@ import type { ObservableSnapshot } from './store.ts'
 export interface IWorkspaces {
   /** The useWorkspaces standard feed (read face — writes stay inside the domain). */
   readonly list: ObservableSnapshot<WorkspaceListState>
+  /** Re-pull the complete Host workspace baseline when the runtime exposes refresh to features. */
+  refresh?(): Promise<void>
   /**
    * Connect a Workspace to its reusable or freshly created blank session.
    * @param workspaceId - target workspace.

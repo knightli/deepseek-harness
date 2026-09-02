@@ -70,6 +70,12 @@ export function apply(ctx: ClientContext): void {
   const browserFlowSource = flowSource('sidebar.workspaces.directoryFlow')
   const pickerFlowSource = flowSource('conversation.hero.workspace.directoryFlow')
   const browserInjected = (): WorkspaceBrowserInjected => ({
+    refreshCatalog: async () => {
+      await Promise.all([
+        ctx.sessions.refresh?.() ?? Promise.resolve(),
+        ctx.workspaces.refresh?.() ?? Promise.resolve(),
+      ])
+    },
     // Explicit group actions keep their target; unscoped New Session inherits
     // the current Session Workspace before the recent-Workspace fallback.
     startSession: (workspaceId) => { ctx.workspaces.startSession(workspaceId) },

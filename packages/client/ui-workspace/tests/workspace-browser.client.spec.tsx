@@ -96,6 +96,65 @@ function rerender(b: ReturnType<typeof mount>, overrides: Partial<WorkspaceBrows
 }
 
 describe('WorkspaceBrowser', () => {
+  it('hides a partial initial catalog behind one loading boundary', () => {
+    mount({
+      useSessions: hook(sessionState([summary('partial-session', 1)], {
+        phase: 'pending', state: 'loading', error: null,
+      })),
+      useWorkspaces: hook({
+        ...workspaceState([workspace('partial-project', ['partial-session'])]),
+        baselinesReady: false,
+      }),
+    })
+
+    expect(screen.getByRole('status').textContent).toBe('正在加载会话…')
+    expect(screen.queryByText('partial-project')).toBeNull()
+    expect(screen.queryByText('partial-session')).toBeNull()
+    expect(screen.queryByRole('button', { name: '搜索会话' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '视图选项' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '添加工作区' })).toBeNull()
+  })
+
+  it('offers one retry when the initial catalog fails', () => {
+    const refreshCatalog = vi.fn(async () => {})
+    mount({
+      refreshCatalog,
+      useSessions: hook(sessionState([], {
+        phase: 'pending', state: 'error',
+        error: { code: 'internal', message: 'hidden transport detail', details: {} },
+      })),
+      useWorkspaces: hook({ ...workspaceState([]), baselinesReady: false }),
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('会话加载失败')
+    expect(screen.queryByText('hidden transport detail')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(refreshCatalog).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the last complete tree visible during refresh and stale failure', () => {
+    const sessions = sessionState([summary('stable-session', 1)])
+    const ready = workspaceState([workspace('stable-project', ['stable-session'])])
+    const b = mount({
+      useSessions: hook(sessions),
+      useWorkspaces: hook({ ...ready, state: 'loading' }),
+    })
+
+    expect(screen.getByRole('status').textContent).toBe('正在刷新会话…')
+    expect(screen.getByText('stable-project')).toBeTruthy()
+
+    rerender(b, {
+      useWorkspaces: hook({
+        ...ready,
+        state: 'error',
+        error: { code: 'internal', message: 'hidden transport detail', details: {} },
+      }),
+    })
+    expect(screen.getByRole('alert').textContent).toContain('会话刷新失败，正在显示上次结果。')
+    expect(screen.getByText('stable-project')).toBeTruthy()
+    expect(screen.queryByText('hidden transport detail')).toBeNull()
+  })
+
   it('prunes deleted Workspace view state only after the Workspace baseline is ready', async () => {
     const pending = {
       ...workspaceState([]),

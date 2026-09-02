@@ -104,6 +104,8 @@ export class SessionForkActionError extends Error {
  * browsing region drives.
  */
 export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
+  /** Re-pull both catalog baselines; the Host may coalesce the two requests. */
+  refreshCatalog?: () => Promise<void>
   /**
    * Start a New Session in a Workspace: reuse-or-create its blank session and
    * open it; without an explicit workspace, inherit the current Session

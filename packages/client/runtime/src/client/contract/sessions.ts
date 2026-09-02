@@ -26,6 +26,8 @@ export type { AgentContext } from '../agents/scope.ts'
 export interface ISessions {
   /** The useSessions standard feed (list rows + current selection; read face — writes stay inside the domain). */
   readonly list: ObservableSnapshot<SessionListState>
+  /** Re-pull the complete Host session baseline when the runtime exposes refresh to features. */
+  refresh?(): Promise<void>
   /** Atomic current-session provide projection (the renderer host's `sessions.provideInfo` feed). */
   readonly currentProvideInfo: HostObservable<SessionMaybeProvideInfo>
   /**

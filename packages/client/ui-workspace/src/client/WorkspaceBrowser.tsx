@@ -46,6 +46,30 @@ function ForkToast({ seq, text, onDone }: {
   const finish = useCallback(() => { onDone(seq) }, [onDone, seq])
   return <Toast text={text} onDone={finish} />
 }
+
+/** One compact status surface over the existing catalog snapshots. */
+function CatalogStatus({ kind, retry, t }: {
+  kind: 'initial-loading' | 'initial-error' | 'refreshing' | 'stale-error'
+  retry: (() => Promise<void>) | undefined
+  t: WorkspaceBrowserProps['t']
+}) {
+  if (kind === 'initial-loading') {
+    return <div className={css.catalogStatus} role="status">{t('catalog.loading')}</div>
+  }
+  if (kind === 'refreshing') {
+    return <div className={css.catalogStatus} role="status">{t('catalog.refreshing')}</div>
+  }
+  return (
+    <div className={clsx(css.catalogStatus, css.catalogError)} role="alert">
+      <span>{t(kind === 'initial-error' ? 'catalog.error' : 'catalog.stale')}</span>
+      {retry !== undefined && (
+        <button type="button" className={css.catalogRetry} onClick={() => { void retry() }}>
+          {t('catalog.retry')}
+        </button>
+      )}
+    </div>
+  )
+}
 /** Session rows visible per Workspace before the local overflow control. */
 const COLLAPSED_SESSION_LIMIT = 5
 
@@ -756,6 +780,7 @@ export function WorkspaceBrowser({
   useWorkspaces,
   useStore,
   actions,
+  refreshCatalog,
   startSession,
   open,
   renameSession,
@@ -774,7 +799,15 @@ export function WorkspaceBrowser({
 }: WorkspaceBrowserProps) {
   const workspaces = useWorkspaces(state => state.items)
   const workspacePhase = useWorkspaces(state => state.phase)
+  const workspaceState = useWorkspaces(state => state.state)
+  const baselinesReady = useWorkspaces(state => state.baselinesReady)
   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
+  const sessionState = useSessions(state => state.state ?? (state.phase === 'ready' ? 'idle' : 'loading'))
+  const catalogHasError = workspaceState === 'error' || sessionState === 'error'
+  const catalogInitialError = !baselinesReady && catalogHasError
+  const catalogRefreshing = baselinesReady && !catalogHasError
+    && (workspaceState === 'loading' || sessionState === 'loading')
+  const catalogStaleError = baselinesReady && catalogHasError
   // Live occupancy of this surface's directory-flow hole (the same source the
   // flow reads): a composition without a picking affordance can add nothing.
   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
@@ -863,6 +896,10 @@ export function WorkspaceBrowser({
       setRemoteSearch({ query: '', status: 'idle', items: [], hasMore: false })
       return
     }
+    if (!baselinesReady) {
+      setRemoteSearch({ query: '', status: 'idle', items: [], hasMore: false })
+      return
+    }
     const controller = new AbortController()
     setRemoteSearch({
       query: normalizedQuery,
@@ -893,7 +930,13 @@ export function WorkspaceBrowser({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [normalizedQuery, searchSessions])
+  }, [baselinesReady, normalizedQuery, searchSessions])
+
+  useEffect(() => {
+    if (baselinesReady) return
+    setWsPickerOpen(false)
+    setSearchExpanded(false)
+  }, [baselinesReady])
 
   // Rename dialog (browser-owned so it outlives row unmounts during collapse).
   const [renameTarget, setRenameTarget] = useState<{ workspaceId: WorkspaceId; currentTitle: string } | null>(null)
@@ -1017,7 +1060,7 @@ export function WorkspaceBrowser({
             {groupBy === 'flat' ? t('section.sessions') : t('section.workspaces')}
           </span>
         )}
-        {wide && (
+        {wide && baselinesReady && (
           <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}>
             <div
               ref={searchRoot}
@@ -1075,7 +1118,7 @@ export function WorkspaceBrowser({
           </div>
         )}
         <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
-          {wide && (
+          {wide && baselinesReady && (
             <ViewOptionsMenu
               groupBy={groupBy}
               orderBy={orderBy}
@@ -1087,7 +1130,7 @@ export function WorkspaceBrowser({
           {/* Adding is the button's one action, so a composition with no
               picking affordance has nothing to offer here: the region hides the
               button rather than leaving a dead one in the header. */}
-          {directoryFlowAvailable && (
+          {baselinesReady && directoryFlowAvailable && (
             <Tooltip label={t('workspace.add')} side="bottom" delayMs={500}>
               <button
                 ref={wsPlusRef}
@@ -1123,7 +1166,7 @@ export function WorkspaceBrowser({
       </div>
 
       {/* The collapsed rail keeps search as its own 36px control. */}
-      {!wide && <div className={css.search}>
+      {!wide && baselinesReady && <div className={css.search}>
         <Tooltip label={t('search')}>
           <button
             type="button"
@@ -1142,8 +1185,21 @@ export function WorkspaceBrowser({
 
       {/* Always-mounted seat keeps the region's flex slot while the list
           itself is wide-only. */}
-      <div className={css.listArea}>
-        {wide && (normalizedQuery !== ''
+      <div className={css.listArea} aria-busy={!baselinesReady || catalogRefreshing}>
+        {wide && !baselinesReady && (
+          <CatalogStatus
+            kind={catalogInitialError ? 'initial-error' : 'initial-loading'}
+            retry={refreshCatalog}
+            t={t}
+          />
+        )}
+        {wide && baselinesReady && catalogRefreshing && (
+          <CatalogStatus kind="refreshing" retry={refreshCatalog} t={t} />
+        )}
+        {wide && baselinesReady && catalogStaleError && (
+          <CatalogStatus kind="stale-error" retry={refreshCatalog} t={t} />
+        )}
+        {wide && baselinesReady && (normalizedQuery !== ''
           ? (
             <SearchResults
               useSessions={useSessions}

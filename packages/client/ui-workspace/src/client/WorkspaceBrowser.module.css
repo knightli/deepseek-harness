@@ -299,6 +299,37 @@
   padding-left: 0;
 }
 
+.catalogStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.catalogError {
+  color: var(--dsw-alias-label-warning, var(--dsw-alias-label-secondary));
+}
+
+.catalogRetry {
+  flex: none;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+  cursor: pointer;
+  font: inherit;
+}
+
+.catalogRetry:hover {
+  background: var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover));
+}
+
 /* Relative for the bottom fade overlay. */
 .treeBody {
   flex: 1;

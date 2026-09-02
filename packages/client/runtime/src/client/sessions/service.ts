@@ -85,6 +85,10 @@ export interface SessionListState {
   current: SessionId | undefined
   /** Arrival lifecycle projected 1:1 from the manager snapshot (see SessionListPhase): empty-with-ready means "truly no sessions". */
   phase: SessionListPhase
+  /** Current baseline pull activity, independent from the monotone arrival phase. */
+  state?: 'idle' | 'loading' | 'error'
+  /** Most recent baseline pull failure; null while idle/loading. */
+  error?: RpcError | null
   /** Direct durable catalogs keyed by their selected parent address. */
   subagentsByParent: Readonly<Record<SessionId, SubagentCatalogSnapshot>>
   /**
@@ -306,7 +310,7 @@ export class SessionRuntime implements ISessions {
       conversation,
     )
     this.list = createSnapshotStore<SessionListState>({
-      ids: [], byId: {}, current: undefined, phase: 'pending',
+      ids: [], byId: {}, current: undefined, phase: 'pending', state: 'idle', error: null,
       subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined,
     })
     // The manager owns wire truth; the store is its projection. Manager
@@ -676,7 +680,7 @@ export class SessionRuntime implements ISessions {
   /** Project the manager's list snapshot into the store (title derivation is display-only). */
   private projectList(): void {
     const {
-      items, current, phase, subagentsByParent, jobsBySession, currentAddress,
+      items, current, phase, state, error, subagentsByParent, jobsBySession, currentAddress,
     } = this.manager.getListSnapshot()
     const ids: SessionId[] = []
     const byId: Record<SessionId, SessionSummary> = {}
@@ -748,7 +752,17 @@ export class SessionRuntime implements ISessions {
         ...(currentAddress === undefined ? {} : { subagentAddress: currentAddress }),
       })
     }
-    this.list.set({ ids, byId, current, phase, subagentsByParent, jobsBySession, currentAddress })
+    this.list.set({
+      ids,
+      byId,
+      current,
+      phase,
+      state,
+      error,
+      subagentsByParent,
+      jobsBySession,
+      currentAddress,
+    })
     this.pruneScopes()
   }
 
